@@ -38,6 +38,21 @@ describe("fetchAnthropicQuotasWithToken", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("does not treat Anthropic OAuth tokens (sk-ant-oat01-...) as direct API keys", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          five_hour: { utilization: 21, resets_at: "2026-04-22T18:30:00Z" },
+          seven_day: { utilization: 9, resets_at: "2026-04-25T08:30:00Z" },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchAnthropicQuotasWithToken("sk-ant-oat01-token");
+    expect(result.success).toBe(true);
+  });
+
   it("fetches and parses quota windows", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(
