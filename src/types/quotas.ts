@@ -6,7 +6,9 @@ export type SupportedQuotaProvider =
   | "synthetic"
   | "zai"
   | "opencode-go"
-  | "kimi-coding";
+  | "kimi-coding"
+  | "grok"
+  | "antigravity";
 
 export type QuotasErrorKind =
   | "cancelled"

@@ -58,5 +58,17 @@ export function getProviderCommandInfo(
         commandName: "kimi:quotas",
         title: "Kimi Code Quotas",
       };
+    case "grok":
+      return {
+        provider,
+        commandName: "grok:quotas",
+        title: "Grok Quotas",
+      };
+    case "antigravity":
+      return {
+        provider,
+        commandName: "antigravity:quotas",
+        title: "Antigravity Quotas",
+      };
   }
 }

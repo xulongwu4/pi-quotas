@@ -7,6 +7,8 @@ import { parseOpenRouterUsage } from "./providers.js";
 import { parseSyntheticUsage } from "./providers.js";
 import { parseZaiUsage } from "./providers.js";
 import { parseOpenCodeGoUsage } from "./providers.js";
+import { parseGrokUsage } from "./providers.js";
+import { parseAntigravityUsage } from "./providers.js";
 
 describe("parseAnthropicUsage", () => {
   it("maps oauth usage response into quota windows", () => {
@@ -858,5 +860,157 @@ describe("parseZaiUsage", () => {
     expect(parseZaiUsage({})).toHaveLength(0);
     expect(parseZaiUsage({ data: {} })).toHaveLength(0);
     expect(parseZaiUsage({ data: { limits: [] } })).toHaveLength(0);
+  });
+});
+
+describe("parseGrokUsage", () => {
+  it("maps credit usage percent and reset date into a quota window", () => {
+    const windows = parseGrokUsage({
+      config: {
+        creditUsagePercent: 42.5,
+        currentPeriod: {
+          end: "2026-05-01T00:00:00Z",
+        },
+        subscriptionTier: "supergrok",
+      },
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({
+      provider: "grok",
+      label: "Subscription",
+      usedPercent: 42.5,
+      resetsAt: new Date("2026-05-01T00:00:00Z"),
+      limitValue: 100,
+      usedValue: 42.5,
+      showPace: true,
+    });
+  });
+
+  it("calculates used percent from on-demand cap and used values", () => {
+    const windows = parseGrokUsage({
+      config: {
+        billingPeriodEnd: "2026-06-01T00:00:00Z",
+        onDemandCap: { val: 200 },
+        onDemandUsed: { val: 50 },
+      },
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({
+      provider: "grok",
+      label: "Subscription",
+      usedPercent: 25,
+      resetsAt: new Date("2026-06-01T00:00:00Z"),
+      limitValue: 200,
+      usedValue: 50,
+    });
+  });
+
+  it("returns empty array when payload is empty or invalid", () => {
+    expect(parseGrokUsage(null)).toHaveLength(0);
+    expect(parseGrokUsage({})).toHaveLength(0);
+    expect(parseGrokUsage({ config: {} })).toHaveLength(0);
+  });
+});
+
+describe("parseAntigravityUsage", () => {
+  it("maps RetrieveUserQuotaSummary groups and buckets into quota windows", () => {
+    const windows = parseAntigravityUsage({
+      response: {
+        groups: [
+          {
+            displayName: "Gemini Models",
+            buckets: [
+              {
+                bucketId: "gemini-5h",
+                displayName: "Five Hour Limit",
+                remaining: { remainingFraction: 0.91 },
+                resetTime: "2026-06-15T11:39:34Z",
+              },
+              {
+                bucketId: "gemini-weekly",
+                displayName: "Weekly Limit",
+                remaining: { remainingFraction: 0.82 },
+                resetTime: "2026-06-19T08:45:39Z",
+              },
+            ],
+          },
+          {
+            displayName: "Claude and GPT models",
+            buckets: [
+              {
+                bucketId: "3p-5h",
+                displayName: "Five Hour Limit",
+                remaining: { remainingFraction: 0.73 },
+                resetTime: "2026-06-15T12:52:10Z",
+              },
+              {
+                bucketId: "3p-weekly",
+                displayName: "Weekly Limit",
+                remaining: { remainingFraction: 0.64 },
+                resetTime: "2026-06-20T00:39:54Z",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(windows).toHaveLength(4);
+    expect(windows[0]).toMatchObject({
+      provider: "antigravity",
+      label: "Gemini 5h",
+      usedPercent: 9,
+      windowSeconds: 5 * 60 * 60,
+    });
+    expect(windows[1]).toMatchObject({
+      provider: "antigravity",
+      label: "Claude/GPT 5h",
+      usedPercent: 27,
+      windowSeconds: 5 * 60 * 60,
+    });
+    expect(windows[2]).toMatchObject({
+      provider: "antigravity",
+      label: "Gemini 7d",
+      usedPercent: 18,
+      windowSeconds: 7 * 24 * 60 * 60,
+    });
+    expect(windows[3]).toMatchObject({
+      provider: "antigravity",
+      label: "Claude/GPT 7d",
+      usedPercent: 36,
+      windowSeconds: 7 * 24 * 60 * 60,
+    });
+  });
+
+  it("parses fallback clientModelConfigs format", () => {
+    const windows = parseAntigravityUsage({
+      userStatus: {
+        cascadeModelConfigData: {
+          clientModelConfigs: [
+            {
+              label: "Gemini 3 Pro",
+              quotaInfo: {
+                remainingFraction: 0.8,
+                resetTime: "2026-06-15T11:39:34Z",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({
+      provider: "antigravity",
+      label: "Gemini 3 Pro",
+      usedPercent: 20,
+    });
+  });
+
+  it("returns empty array for invalid payload", () => {
+    expect(parseAntigravityUsage(null)).toHaveLength(0);
+    expect(parseAntigravityUsage({})).toHaveLength(0);
   });
 });

@@ -58,4 +58,22 @@ describe("getProviderCommandInfo", () => {
       title: "Kimi Code Quotas",
     });
   });
+
+  it("maps grok to grok:quotas", () => {
+    const info = getProviderCommandInfo("grok");
+    expect(info).toMatchObject<Partial<ProviderCommandInfo>>({
+      provider: "grok",
+      commandName: "grok:quotas",
+      title: "Grok Quotas",
+    });
+  });
+
+  it("maps antigravity to antigravity:quotas", () => {
+    const info = getProviderCommandInfo("antigravity");
+    expect(info).toMatchObject<Partial<ProviderCommandInfo>>({
+      provider: "antigravity",
+      commandName: "antigravity:quotas",
+      title: "Antigravity Quotas",
+    });
+  });
 });

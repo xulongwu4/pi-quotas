@@ -47,6 +47,44 @@ describe("formatWindowStatus", () => {
     expect(result).toContain("[success]");
   });
 
+  it("formats Grok subscription window using sub short label", () => {
+    const w: WindowStatus = {
+      label: "Subscription",
+      usedPercent: 40,
+      severity: "none",
+      resetsAt: "2026-06-01T00:00:00Z",
+      limited: false,
+      usedValue: 40,
+      limitValue: 100,
+    };
+    const result = formatWindowStatus(theme, w);
+    expect(result).toContain("sub:");
+    expect(result).toContain("60% left");
+  });
+
+  it("formats Antigravity windows with custom short labels", () => {
+    const w1: WindowStatus = {
+      label: "Gemini 5h",
+      usedPercent: 20,
+      severity: "none",
+      resetsAt: "2026-06-15T11:39:34Z",
+      limited: false,
+      usedValue: 20,
+      limitValue: 100,
+    };
+    const w2: WindowStatus = {
+      label: "Claude/GPT 7d",
+      usedPercent: 35,
+      severity: "none",
+      resetsAt: "2026-06-20T00:39:54Z",
+      limited: false,
+      usedValue: 35,
+      limitValue: 100,
+    };
+    expect(formatWindowStatus(theme, w1)).toContain("gem-5h:");
+    expect(formatWindowStatus(theme, w2)).toContain("3p-7d:");
+  });
+
   it("shows currency for isCurrency windows (Anthropic extra)", () => {
     const w: WindowStatus = {
       label: "Extra (AUD)",

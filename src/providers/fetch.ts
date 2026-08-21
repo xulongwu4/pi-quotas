@@ -6,8 +6,10 @@ import type { AuthStorage } from "@mariozechner/pi-coding-agent";
 import type { QuotasErrorKind, QuotasResult, SupportedQuotaProvider } from "../types/quotas.js";
 import {
   parseAnthropicUsage,
+  parseAntigravityUsage,
   parseCodexUsage,
   parseGitHubCopilotUsage,
+  parseGrokUsage,
   parseKimiCodingUsage,
   parseOpenRouterUsage,
   parseSyntheticUsage,
@@ -502,6 +504,164 @@ export async function fetchZaiQuotas(
   return fetchZaiQuotasWithToken(await providerAccessToken(authStorage, "zai"), signal);
 }
 
+export function grokLocalAuthToken(): string | undefined {
+  try {
+    const grokHome = process.env.GROK_HOME || join(homedir(), ".grok");
+    const authPath = join(grokHome, "auth.json");
+    const raw = JSON.parse(readFileSync(authPath, "utf8"));
+    if (!raw || typeof raw !== "object") return undefined;
+
+    for (const [scope, val] of Object.entries(raw)) {
+      if (
+        scope.startsWith("https://auth.x.ai::") &&
+        val &&
+        typeof val === "object"
+      ) {
+        const key =
+          (val as any).key ??
+          (val as any).access_token ??
+          (val as any).accessToken;
+        if (typeof key === "string" && key.length > 0) return key;
+      }
+    }
+    for (const val of Object.values(raw)) {
+      if (val && typeof val === "object") {
+        const key =
+          (val as any).key ??
+          (val as any).access_token ??
+          (val as any).accessToken;
+        if (typeof key === "string" && key.length > 0) return key;
+      }
+    }
+    if (typeof (raw as any).key === "string") return (raw as any).key;
+    if (typeof (raw as any).access_token === "string")
+      return (raw as any).access_token;
+  } catch {
+    // Ignore missing or malformed auth file
+  }
+  return undefined;
+}
+
+export async function fetchGrokQuotasWithToken(
+  accessToken: string | undefined,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  if (!accessToken)
+    return failure("No Grok/xAI access token found", "config");
+
+  const result = await fetchJson(
+    "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "x-xai-token-auth": "xai-grok-cli",
+        Accept: "application/json",
+      },
+    },
+    signal,
+  );
+  if (!result.ok) return failure(result.message, result.kind);
+  return success("grok", parseGrokUsage(result.data));
+}
+
+export async function fetchGrokQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  const token =
+    (await providerAccessToken(authStorage, "grok")) ??
+    (await providerAccessToken(authStorage, "xai")) ??
+    process.env.GROK_OAUTH_TOKEN ??
+    process.env.GROK_API_KEY ??
+    process.env.XAI_API_KEY ??
+    grokLocalAuthToken();
+  return fetchGrokQuotasWithToken(token, signal);
+}
+
+export function antigravityLocalAuthToken(): string | undefined {
+  try {
+    const credsPath = join(homedir(), ".codexbar", "antigravity", "oauth_creds.json");
+    const raw = JSON.parse(readFileSync(credsPath, "utf8"));
+    const token = raw?.access_token ?? raw?.accessToken ?? raw?.token;
+    if (typeof token === "string" && token.length > 0) return token;
+  } catch {
+    // Ignore missing or malformed auth file
+  }
+  return undefined;
+}
+
+export async function fetchAntigravityQuotasWithToken(
+  accessToken: string | undefined,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  if (!accessToken)
+    return failure("No Antigravity/Google access token found", "config");
+
+  // Primary: fetchAvailableModels endpoint (returns all model quotas including Gemini and Claude/GPT)
+  const result = await fetchJson(
+    "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "antigravity",
+      },
+      body: "{}",
+    },
+    signal,
+  );
+
+  if (result.ok) {
+    return success("antigravity", parseAntigravityUsage(result.data));
+  }
+
+  // Fallback: retrieveUserQuota
+  const fallback = await fetchJson(
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "antigravity",
+      },
+      body: "{}",
+    },
+    signal,
+  );
+
+  if (fallback.ok) {
+    return success("antigravity", parseAntigravityUsage(fallback.data));
+  }
+
+  return failure(result.message, result.kind);
+}
+
+export async function fetchAntigravityQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  const antigravityCred = authStorage.get("antigravity") as any;
+  const geminiCred = authStorage.get("gemini") as any;
+  const googleCred = authStorage.get("google") as any;
+
+  const token =
+    (typeof antigravityCred === "object" ? antigravityCred?.access ?? antigravityCred?.key : undefined) ??
+    (await providerAccessToken(authStorage, "antigravity")) ??
+    (typeof geminiCred === "object" ? geminiCred?.access ?? geminiCred?.key : undefined) ??
+    (await providerAccessToken(authStorage, "gemini")) ??
+    (typeof googleCred === "object" ? googleCred?.access ?? googleCred?.key : undefined) ??
+    (await providerAccessToken(authStorage, "google")) ??
+    process.env.ANTIGRAVITY_OAUTH_TOKEN ??
+    process.env.ANTIGRAVITY_API_KEY ??
+    process.env.ANTIGRAVITY_TOKEN ??
+    antigravityLocalAuthToken();
+  return fetchAntigravityQuotasWithToken(token, signal);
+}
+
 export const PROVIDER_FETCHERS = {
   anthropic: fetchAnthropicQuotas,
   "openai-codex": fetchCodexQuotas,
@@ -511,4 +671,6 @@ export const PROVIDER_FETCHERS = {
   zai: fetchZaiQuotas,
   "opencode-go": fetchOpenCodeGoQuotas,
   "kimi-coding": fetchKimiCodingQuotas,
+  grok: fetchGrokQuotas,
+  antigravity: fetchAntigravityQuotas,
 } as const;

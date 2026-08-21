@@ -749,3 +749,229 @@ export function parseZaiUsage(data: any): QuotaWindow[] {
   collected.sort((a, b) => a.windowSeconds - b.windowSeconds);
   return collected;
 }
+
+// Grok (xAI) consumer subscription quotas from the CLI chat proxy.
+export function parseGrokUsage(data: any): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  if (!data || typeof data !== "object") return windows;
+
+  const config = data.config ?? data;
+  const resetRaw =
+    config?.currentPeriod?.end ??
+    config?.billingPeriodEnd ??
+    data?.currentPeriod?.end ??
+    data?.billingPeriodEnd;
+  const resetsAt = parseDateish(resetRaw);
+
+  const rawPercent =
+    typeof config?.creditUsagePercent === "number"
+      ? config.creditUsagePercent
+      : typeof data?.creditUsagePercent === "number"
+        ? data.creditUsagePercent
+        : undefined;
+
+  const cap = Number(config?.onDemandCap?.val ?? data?.onDemandCap?.val ?? 0);
+  const used = Number(
+    config?.onDemandUsed?.val ?? data?.onDemandUsed?.val ?? 0,
+  );
+
+  let usedPercent: number | undefined;
+  if (rawPercent != null && Number.isFinite(rawPercent)) {
+    usedPercent = Math.max(0, Math.min(100, rawPercent));
+  } else if (cap > 0 && Number.isFinite(used)) {
+    usedPercent = safePercent(used, cap);
+  } else if (resetsAt.getTime() > 0) {
+    usedPercent = 0;
+  }
+
+  if (usedPercent == null) return windows;
+
+  const windowSeconds =
+    resetsAt.getTime() > 0
+      ? monthWindowSeconds(resetsAt)
+      : 30 * 24 * 60 * 60;
+
+  windows.push({
+    provider: "grok",
+    label: "Subscription",
+    usedPercent,
+    resetsAt,
+    windowSeconds,
+    usedValue: cap > 0 && Number.isFinite(used) ? used : usedPercent,
+    limitValue: cap > 0 ? cap : 100,
+    showPace: true,
+    nextLabel: "Resets",
+  });
+
+  return windows;
+}
+
+// Google Antigravity quota parser (RetrieveUserQuotaSummary, fetchAvailableModels & GetUserStatus formats).
+export function parseAntigravityUsage(data: any): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  if (!data || typeof data !== "object") return windows;
+
+  // 1) Primary: RetrieveUserQuotaSummary format (live dynamic buckets from local daemon / verified source)
+  const groups = data?.response?.groups ?? data?.groups;
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      if (!group || typeof group !== "object") continue;
+      const groupName = String(group.displayName ?? "");
+      const isGemini = groupName.toLowerCase().includes("gemini");
+      const prefix = isGemini ? "Gemini" : "Claude/GPT";
+
+      const buckets = Array.isArray(group.buckets) ? group.buckets : [];
+      for (const bucket of buckets) {
+        if (!bucket || typeof bucket !== "object") continue;
+        const bucketId = String(bucket.bucketId ?? "").toLowerCase();
+        const displayName = String(bucket.displayName ?? "").toLowerCase();
+
+        const fraction =
+          bucket.remaining?.remainingFraction ??
+          bucket.remaining?.value ??
+          bucket.remainingFraction;
+        if (typeof fraction !== "number" || !Number.isFinite(fraction)) continue;
+
+        const is5h =
+          bucketId.includes("5h") ||
+          bucketId.includes("session") ||
+          displayName.includes("5h") ||
+          displayName.includes("five") ||
+          displayName.includes("session");
+        const isWeekly =
+          bucketId.includes("week") ||
+          bucketId.includes("7d") ||
+          displayName.includes("week") ||
+          displayName.includes("7d");
+
+        const cadence = is5h ? "5h" : isWeekly ? "7d" : bucket.displayName || "Quota";
+        const windowSeconds = is5h ? 5 * 60 * 60 : isWeekly ? 7 * 24 * 60 * 60 : 24 * 60 * 60;
+        const usedPercent = Math.max(0, Math.min(100, Math.round((1 - fraction) * 100)));
+
+        windows.push({
+          provider: "antigravity",
+          label: `${prefix} ${cadence}`,
+          usedPercent,
+          resetsAt: parseDateish(bucket.resetTime),
+          windowSeconds,
+          usedValue: usedPercent,
+          limitValue: 100,
+          showPace: isWeekly,
+          nextLabel: "Resets",
+        });
+      }
+    }
+    if (windows.length > 0) {
+      windows.sort((a, b) => a.windowSeconds - b.windowSeconds);
+      return windows;
+    }
+  }
+
+  // 2) GetUserStatus / GetCommandModelConfigs format (with real dynamic fractions)
+  const configs =
+    data?.userStatus?.cascadeModelConfigData?.clientModelConfigs ??
+    data?.cascadeModelConfigData?.clientModelConfigs ??
+    data?.clientModelConfigs;
+  if (Array.isArray(configs)) {
+    for (const config of configs) {
+      if (!config || typeof config !== "object") continue;
+      const fraction = config?.quotaInfo?.remainingFraction;
+      if (typeof fraction !== "number" || !Number.isFinite(fraction)) continue;
+
+      const label = config.label ?? config.modelOrAlias?.model ?? "Gemini";
+      const usedPercent = Math.max(0, Math.min(100, Math.round((1 - fraction) * 100)));
+
+      windows.push({
+        provider: "antigravity",
+        label,
+        usedPercent,
+        resetsAt: parseDateish(config?.quotaInfo?.resetTime),
+        windowSeconds: 5 * 60 * 60,
+        usedValue: usedPercent,
+        limitValue: 100,
+        showPace: false,
+        nextLabel: "Resets",
+      });
+    }
+    if (windows.length > 0) {
+      windows.sort((a, b) => a.windowSeconds - b.windowSeconds);
+      return windows;
+    }
+  }
+
+  // 3) fetchAvailableModels format (models dictionary)
+  // Note: If every model in fetchAvailableModels reports remainingFraction: 1.0 (static catalog artifact),
+  // this indicates the remote API is only echoing model availability rather than dynamic consumption.
+  if (data?.models && typeof data.models === "object") {
+    const models = data.models as Record<string, any>;
+    let minGeminiFraction = 1;
+    let geminiResetTime: string | undefined;
+    let minClaudeGptFraction = 1;
+    let claudeGptResetTime: string | undefined;
+    let hasGemini = false;
+    let hasClaudeGpt = false;
+    let allFractionsAreOne = true;
+
+    for (const [modelId, modelObj] of Object.entries(models)) {
+      if (!modelObj || typeof modelObj !== "object") continue;
+      const fraction = modelObj?.quotaInfo?.remainingFraction;
+      if (typeof fraction !== "number" || !Number.isFinite(fraction)) continue;
+      if (fraction < 0.999) allFractionsAreOne = false;
+      const resetTime = modelObj?.quotaInfo?.resetTime;
+      const id = modelId.toLowerCase();
+
+      if (id.includes("gemini")) {
+        hasGemini = true;
+        if (fraction < minGeminiFraction) {
+          minGeminiFraction = fraction;
+          geminiResetTime = resetTime;
+        } else if (!geminiResetTime && resetTime) {
+          geminiResetTime = resetTime;
+        }
+      } else if (id.includes("claude") || id.includes("gpt")) {
+        hasClaudeGpt = true;
+        if (fraction < minClaudeGptFraction) {
+          minClaudeGptFraction = fraction;
+          claudeGptResetTime = resetTime;
+        } else if (!claudeGptResetTime && resetTime) {
+          claudeGptResetTime = resetTime;
+        }
+      }
+    }
+
+    if (!allFractionsAreOne) {
+      if (hasGemini) {
+        const usedPercent = Math.max(0, Math.min(100, Math.round((1 - minGeminiFraction) * 100)));
+        windows.push({
+          provider: "antigravity",
+          label: "Gemini 5h",
+          usedPercent,
+          resetsAt: parseDateish(geminiResetTime),
+          windowSeconds: 5 * 60 * 60,
+          usedValue: usedPercent,
+          limitValue: 100,
+          showPace: false,
+          nextLabel: "Resets",
+        });
+      }
+
+      if (hasClaudeGpt) {
+        const usedPercent = Math.max(0, Math.min(100, Math.round((1 - minClaudeGptFraction) * 100)));
+        windows.push({
+          provider: "antigravity",
+          label: "Claude/GPT 5h",
+          usedPercent,
+          resetsAt: parseDateish(claudeGptResetTime),
+          windowSeconds: 5 * 60 * 60,
+          usedValue: usedPercent,
+          limitValue: 100,
+          showPace: false,
+          nextLabel: "Resets",
+        });
+      }
+    }
+  }
+
+  windows.sort((a, b) => a.windowSeconds - b.windowSeconds);
+  return windows;
+}

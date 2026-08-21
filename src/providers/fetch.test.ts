@@ -2,9 +2,13 @@ import { AuthStorage } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAnthropicQuotasWithToken,
+  fetchAntigravityQuotas,
+  fetchAntigravityQuotasWithToken,
   fetchCodexQuotasWithToken,
   fetchGitHubCopilotQuotas,
   fetchGitHubCopilotQuotasWithToken,
+  fetchGrokQuotas,
+  fetchGrokQuotasWithToken,
   fetchKimiCodingQuotasWithToken,
   fetchOpenRouterQuotasWithToken,
 } from "./fetch.js";
@@ -332,5 +336,280 @@ describe("fetchOpenRouterQuotasWithToken", () => {
       expect(result.error.message).toBe("invalid x-api-key");
       expect(result.error.message).not.toContain("{");
     }
+  });
+});
+
+describe("fetchGrokQuotasWithToken", () => {
+  it("returns config error when token missing", async () => {
+    const result = await fetchGrokQuotasWithToken(undefined);
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "config" },
+    });
+  });
+
+  it("fetches and parses Grok subscription windows", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: {
+            creditUsagePercent: 35.5,
+            currentPeriod: { end: "2026-06-01T00:00:00Z" },
+            subscriptionTier: "supergrok",
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchGrokQuotasWithToken("grok-token");
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("grok");
+      expect(result.data.windows).toHaveLength(1);
+      expect(result.data.windows[0]).toMatchObject({
+        label: "Subscription",
+        usedPercent: 35.5,
+      });
+    }
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer grok-token",
+          "x-xai-token-auth": "xai-grok-cli",
+        }),
+      }),
+    );
+  });
+
+  it("handles HTTP error cleanly", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: "Invalid access token" }),
+        { status: 401 },
+      ),
+    ) as any;
+
+    const result = await fetchGrokQuotasWithToken("bad-token");
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "http", message: "Invalid access token" },
+    });
+  });
+});
+
+describe("fetchGrokQuotas", () => {
+  it("uses authStorage grok key if available", async () => {
+    const auth = AuthStorage.inMemory({
+      grok: { type: "api_key", key: "auth-grok-key" },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: {
+            creditUsagePercent: 10,
+            currentPeriod: { end: "2026-06-01T00:00:00Z" },
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchGrokQuotas(auth);
+    expect(result.success).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer auth-grok-key",
+        }),
+      }),
+    );
+  });
+
+  it("falls back to authStorage xai key if grok key is absent", async () => {
+    const auth = AuthStorage.inMemory({
+      xai: { type: "api_key", key: "auth-xai-key" },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: {
+            creditUsagePercent: 15,
+            currentPeriod: { end: "2026-06-01T00:00:00Z" },
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchGrokQuotas(auth);
+    expect(result.success).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer auth-xai-key",
+        }),
+      }),
+    );
+  });
+});
+
+describe("fetchAntigravityQuotasWithToken", () => {
+  it("returns config error when token missing", async () => {
+    const result = await fetchAntigravityQuotasWithToken(undefined);
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "config" },
+    });
+  });
+
+  it("fetches and parses Antigravity quota windows", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          response: {
+            groups: [
+              {
+                displayName: "Gemini Models",
+                buckets: [
+                  {
+                    bucketId: "gemini-5h",
+                    displayName: "Five Hour Limit",
+                    remaining: { remainingFraction: 0.85 },
+                    resetTime: "2026-06-15T11:39:34Z",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchAntigravityQuotasWithToken("antigravity-token");
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("antigravity");
+      expect(result.data.windows).toHaveLength(1);
+      expect(result.data.windows[0]).toMatchObject({
+        label: "Gemini 5h",
+        usedPercent: 15,
+      });
+    }
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer antigravity-token",
+          "User-Agent": "antigravity",
+        }),
+      }),
+    );
+  });
+
+  it("handles HTTP error", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { message: "Permission denied" } }),
+        { status: 403 },
+      ),
+    ) as any;
+
+    const result = await fetchAntigravityQuotasWithToken("bad-token");
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "http", message: "Permission denied" },
+    });
+  });
+});
+
+describe("fetchAntigravityQuotas", () => {
+  it("uses authStorage antigravity token if available", async () => {
+    const auth = AuthStorage.inMemory({
+      antigravity: { type: "api_key", key: "auth-antigravity-key" },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          response: {
+            groups: [
+              {
+                displayName: "Gemini Models",
+                buckets: [
+                  {
+                    bucketId: "gemini-5h",
+                    displayName: "Five Hour Limit",
+                    remaining: { remainingFraction: 0.9 },
+                    resetTime: "2026-06-15T11:39:34Z",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchAntigravityQuotas(auth);
+    expect(result.success).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer auth-antigravity-key",
+        }),
+      }),
+    );
+  });
+
+  it("falls back to authStorage gemini key if antigravity key is absent", async () => {
+    const auth = AuthStorage.inMemory({
+      gemini: { type: "api_key", key: "auth-gemini-key" },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          response: {
+            groups: [
+              {
+                displayName: "Gemini Models",
+                buckets: [
+                  {
+                    bucketId: "gemini-5h",
+                    displayName: "Five Hour Limit",
+                    remaining: { remainingFraction: 0.9 },
+                    resetTime: "2026-06-15T11:39:34Z",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchAntigravityQuotas(auth);
+    expect(result.success).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer auth-gemini-key",
+        }),
+      }),
+    );
   });
 });

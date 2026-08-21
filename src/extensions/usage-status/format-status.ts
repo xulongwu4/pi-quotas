@@ -42,6 +42,15 @@ const SHORT_LABELS: Record<string, string> = {
   "Requests / 5h": "5h",
   "Search / hour": "search",
   "Free Tool Calls / day": "tools",
+  // Grok labels
+  "Subscription": "sub",
+  "SuperGrok": "grok",
+  "SuperGrok Heavy": "heavy",
+  // Antigravity labels
+  "Gemini 5h": "gem-5h",
+  "Gemini 7d": "gem-7d",
+  "Claude/GPT 5h": "3p-5h",
+  "Claude/GPT 7d": "3p-7d",
 };
 
 /**

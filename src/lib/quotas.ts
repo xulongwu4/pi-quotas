@@ -11,6 +11,8 @@ export const SUPPORTED_PROVIDERS: SupportedQuotaProvider[] = [
   "zai",
   "opencode-go",
   "kimi-coding",
+  "grok",
+  "antigravity",
 ];
 
 export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
@@ -22,6 +24,8 @@ export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
   zai: "Z.ai",
   "opencode-go": "OpenCode Go",
   "kimi-coding": "Kimi Code",
+  grok: "Grok",
+  antigravity: "Antigravity",
 };
 
 const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
@@ -33,6 +37,8 @@ const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
   zai: 60_000,
   "opencode-go": 60_000,
   "kimi-coding": 60_000,
+  grok: 60_000,
+  antigravity: 60_000,
 };
 
 type CacheEntry = {
@@ -43,10 +49,43 @@ type CacheEntry = {
 
 const cache = new Map<SupportedQuotaProvider, CacheEntry>();
 
+export function normalizeQuotaProvider(
+  provider: string | undefined,
+): SupportedQuotaProvider | undefined {
+  if (!provider) return undefined;
+  if (
+    provider === "grok" ||
+    provider.startsWith("grok/") ||
+    provider === "xai" ||
+    provider.startsWith("xai/")
+  ) {
+    return "grok";
+  }
+  if (
+    provider === "antigravity" ||
+    provider.startsWith("antigravity/") ||
+    provider === "agy" ||
+    provider.startsWith("agy/") ||
+    provider === "google-antigravity"
+  ) {
+    return "antigravity";
+  }
+  if (
+    provider === "opencode-go" ||
+    provider.startsWith("opencode-go/")
+  ) {
+    return "opencode-go";
+  }
+  if (SUPPORTED_PROVIDERS.includes(provider as SupportedQuotaProvider)) {
+    return provider as SupportedQuotaProvider;
+  }
+  return undefined;
+}
+
 export function isSupportedProvider(
   provider: string | undefined,
 ): provider is SupportedQuotaProvider {
-  return SUPPORTED_PROVIDERS.includes(provider as SupportedQuotaProvider);
+  return normalizeQuotaProvider(provider) !== undefined;
 }
 
 export function clearQuotaCache(provider?: SupportedQuotaProvider): void {
@@ -56,9 +95,12 @@ export function clearQuotaCache(provider?: SupportedQuotaProvider): void {
 
 export async function fetchProviderQuotas(
   authStorage: AuthStorage,
-  provider: SupportedQuotaProvider,
+  rawProvider: SupportedQuotaProvider | string,
   options?: { force?: boolean; signal?: AbortSignal },
 ): Promise<QuotasResult> {
+  const provider =
+    normalizeQuotaProvider(rawProvider) ??
+    (rawProvider as SupportedQuotaProvider);
   const entry = cache.get(provider) ?? {};
   const now = Date.now();
   const ttl = PROVIDER_TTLS_MS[provider];
