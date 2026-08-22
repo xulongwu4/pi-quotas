@@ -225,7 +225,7 @@ describe("formatWindowStatus", () => {
     expect(formatStatusForFooter({ ui: { theme } } as any, [])).toBeUndefined();
   });
 
-  it("filters Anthropic subscription windows from footer status while keeping extra usage", () => {
+  it("includes Anthropic subscription windows in footer status alongside extra usage", () => {
     const windows = toStatusWindows([
       {
         provider: "anthropic",
@@ -257,8 +257,10 @@ describe("formatWindowStatus", () => {
       },
     ]);
 
-    expect(windows).toHaveLength(1);
-    expect(windows[0]).toMatchObject({ label: "Extra (USD)" });
+    expect(windows).toHaveLength(3);
+    expect(windows[0]).toMatchObject({ label: "5h", usedPercent: 10 });
+    expect(windows[1]).toMatchObject({ label: "7d Sonnet", usedPercent: 20 });
+    expect(windows[2]).toMatchObject({ label: "Extra (USD)", usedPercent: 30 });
   });
 
   it("does not prefix elapsed reset times with in", () => {

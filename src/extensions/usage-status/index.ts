@@ -35,7 +35,20 @@ function isStaleContextError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(STALE_CONTEXT_MESSAGE);
 }
 
-function getContextProvider(ctx: ExtensionContext | undefined): string | undefined {
+function getContextProvider(
+  ctx: ExtensionContext | undefined,
+  modelOrProvider?: { provider?: string } | string,
+): string | undefined {
+  if (typeof modelOrProvider === "string" && modelOrProvider.length > 0) {
+    return modelOrProvider;
+  }
+  if (
+    typeof modelOrProvider === "object" &&
+    typeof modelOrProvider?.provider === "string" &&
+    modelOrProvider.provider.length > 0
+  ) {
+    return modelOrProvider.provider;
+  }
   if (!ctx) return undefined;
   try {
     return ctx.model?.provider;
@@ -61,21 +74,6 @@ export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowS
     .join(" ");
 }
 
-const ANTHROPIC_SUBSCRIPTION_WINDOW_LABELS = new Set([
-  "5h",
-  "7d",
-  "7d Sonnet",
-  "7d Opus",
-  "7d Opus (legacy)",
-]);
-
-function shouldShowInStatus(window: QuotaWindow): boolean {
-  return !(
-    window.provider === "anthropic" &&
-    ANTHROPIC_SUBSCRIPTION_WINDOW_LABELS.has(window.label)
-  );
-}
-
 export function toWindowStatus(window: QuotaWindow): WindowStatus {
   return {
     label: window.label,
@@ -90,7 +88,7 @@ export function toWindowStatus(window: QuotaWindow): WindowStatus {
 }
 
 export function toStatusWindows(windows: QuotaWindow[]): WindowStatus[] {
-  return windows.filter(shouldShowInStatus).map(toWindowStatus);
+  return windows.map(toWindowStatus);
 }
 
 export function formatStatusForFooter(
@@ -183,14 +181,23 @@ function createStatusRefresher() {
   }
 
   return {
-    async refreshFor(ctx: ExtensionContext): Promise<void> {
+    async refreshFor(
+      ctx: ExtensionContext,
+      providerOverride?: { provider?: string } | string,
+    ): Promise<void> {
       activeContext = ctx;
-      activeProvider = getContextProvider(ctx);
+      const prevProvider = activeProvider;
+      activeProvider = getContextProvider(ctx, providerOverride);
       generation++;
       const requestGeneration = generation;
       if (!activeProvider || !isSupportedProvider(activeProvider)) {
         setStatusSafely(ctx, undefined);
         return;
+      }
+      // If switching models within the same provider, keep rendering the existing
+      // status while the background quota refresh runs to avoid flickering/disappearing.
+      if (prevProvider === activeProvider && lastStatus) {
+        setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus ?? []));
       }
       await update(ctx, requestGeneration);
     },
@@ -234,8 +241,11 @@ export default async function (pi: ExtensionAPI) {
     }
   }));
 
-  function scheduleRefresh(ctx: ExtensionContext): void {
-    void refresher.refreshFor(ctx).catch(() => undefined);
+  function scheduleRefresh(
+    ctx: ExtensionContext,
+    providerOverride?: { provider?: string } | string,
+  ): void {
+    void refresher.refreshFor(ctx, providerOverride).catch(() => undefined);
   }
 
   unsubscribeEventBusListeners.push(pi.events.on(QUOTAS_CONFIG_UPDATED_EVENT, (data: unknown) => {
@@ -284,17 +294,18 @@ export default async function (pi: ExtensionAPI) {
     scheduleRefresh(ctx);
   });
 
-  pi.on("model_select", (_event, ctx) => {
+  pi.on("model_select", (event, ctx) => {
     currentContext = ctx;
+    const provider = getContextProvider(ctx, event?.model);
     if (!enabled) {
       refresher.stop(ctx);
       return;
     }
-    if (shouldDeferToSynthetic(getContextProvider(ctx))) {
+    if (shouldDeferToSynthetic(provider)) {
       refresher.stop(ctx);
       return;
     }
-    scheduleRefresh(ctx);
+    scheduleRefresh(ctx, event?.model);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
