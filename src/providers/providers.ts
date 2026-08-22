@@ -507,65 +507,70 @@ export function parseSyntheticUsage(data: any): QuotaWindow[] {
   return windows;
 }
 
-export function parseOpenCodeGoUsage(data: {
-  rolling?: {
-    usagePercent: number;
-    resetInSec: number;
-    percentRemaining: number;
-    resetTimeIso: string;
-  };
-  weekly?: {
-    usagePercent: number;
-    resetInSec: number;
-    percentRemaining: number;
-    resetTimeIso: string;
-  };
-  monthly?: {
-    usagePercent: number;
-    resetInSec: number;
-    percentRemaining: number;
-    resetTimeIso: string;
-  };
-}): QuotaWindow[] {
+export function parseOpenCodeGoUsage(data: any): QuotaWindow[] {
   const windows: QuotaWindow[] = [];
+  if (!data || typeof data !== "object") return windows;
 
-  if (data.rolling) {
+  const usage = data?.usage ?? data;
+
+  if (usage.rolling && typeof usage.rolling === "object") {
+    const raw = usage.rolling;
+    const usedPercent = Number(raw.percent ?? raw.usagePercent ?? 0);
+    const resetsAt = parseDateish(
+      raw.resetsAt ??
+        raw.resetTimeIso ??
+        (raw.resetInSec ? Date.now() + Number(raw.resetInSec) * 1000 : undefined),
+    );
     windows.push({
       provider: "opencode-go",
       label: "5h Rolling",
-      usedPercent: data.rolling.usagePercent,
-      resetsAt: new Date(data.rolling.resetTimeIso),
+      usedPercent,
+      resetsAt,
       windowSeconds: 5 * 60 * 60,
-      usedValue: data.rolling.usagePercent,
+      usedValue: usedPercent,
       limitValue: 100,
       showPace: false,
       nextLabel: "Resets",
     });
   }
 
-  if (data.weekly) {
+  if (usage.weekly && typeof usage.weekly === "object") {
+    const raw = usage.weekly;
+    const usedPercent = Number(raw.percent ?? raw.usagePercent ?? 0);
+    const resetsAt = parseDateish(
+      raw.resetsAt ??
+        raw.resetTimeIso ??
+        (raw.resetInSec ? Date.now() + Number(raw.resetInSec) * 1000 : undefined),
+    );
     windows.push({
       provider: "opencode-go",
       label: "Weekly",
-      usedPercent: data.weekly.usagePercent,
-      resetsAt: new Date(data.weekly.resetTimeIso),
+      usedPercent,
+      resetsAt,
       windowSeconds: 7 * 24 * 60 * 60,
-      usedValue: data.weekly.usagePercent,
+      usedValue: usedPercent,
       limitValue: 100,
       showPace: true,
-      paceScale: 1 / 7,
+      paceScale: 1,
       nextLabel: "Resets",
     });
   }
 
-  if (data.monthly) {
+  if (usage.monthly && typeof usage.monthly === "object") {
+    const raw = usage.monthly;
+    const usedPercent = Number(raw.percent ?? raw.usagePercent ?? 0);
+    const resetsAt = parseDateish(
+      raw.resetsAt ??
+        raw.resetTimeIso ??
+        (raw.resetInSec ? Date.now() + Number(raw.resetInSec) * 1000 : undefined),
+    );
     windows.push({
       provider: "opencode-go",
       label: "Monthly",
-      usedPercent: data.monthly.usagePercent,
-      resetsAt: new Date(data.monthly.resetTimeIso),
+      usedPercent,
+      resetsAt,
       windowSeconds: 30 * 24 * 60 * 60,
-      usedValue: data.monthly.usagePercent,
+      usedValue: usedPercent,
       limitValue: 100,
       showPace: true,
       paceScale: 1,

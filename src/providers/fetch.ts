@@ -417,32 +417,35 @@ export async function fetchSyntheticQuotas(
 }
 
 export async function fetchOpenCodeGoQuotas(
-  _authStorage: AuthStorage,
+  authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
+  const storedApiKey =
+    (await providerAccessToken(authStorage, "opencode-go")) ??
+    (await providerAccessToken(authStorage, "opencode"));
+
+  const envApiKey =
+    process.env.OPENCODE_API_KEY ?? process.env.OPENCODE_GO_API_KEY;
+
   const configResult = await resolveOpenCodeGoConfigCached();
-  if (configResult.state === "none") {
+  const config =
+    configResult.state === "configured" ? configResult.config : {};
+
+  const apiKey = storedApiKey ?? envApiKey ?? config.apiKey;
+  const authCookie = config.authCookie;
+  const workspaceId = config.workspaceId;
+
+  if (!apiKey && !authCookie) {
     return failure(
-      "No OpenCode Go config. Set OPENCODE_GO_WORKSPACE_ID +" +
-        " OPENCODE_GO_AUTH_COOKIE, or create" +
-        " ~/.config/opencode/opencode-quota/opencode-go.json",
-      "config",
-    );
-  }
-  if (configResult.state === "incomplete") {
-    return failure(
-      `OpenCode Go config incomplete: missing ${configResult.missing}`,
-      "config",
-    );
-  }
-  if (configResult.state === "invalid") {
-    return failure(
-      `OpenCode Go config invalid: ${configResult.error}`,
+      "No OpenCode Go credentials found. Set OPENCODE_API_KEY (or OPENCODE_GO_API_KEY / OPENCODE_GO_AUTH_COOKIE) or add to Pi auth",
       "config",
     );
   }
 
-  const result = await queryOpenCodeGoQuota(configResult.config, signal);
+  const result = await queryOpenCodeGoQuota(
+    { apiKey, authCookie, workspaceId },
+    signal,
+  );
   if (!result.success) return failure(result.error, "http");
   return success("opencode-go", parseOpenCodeGoUsage(result));
 }

@@ -10,6 +10,7 @@ import {
   fetchGrokQuotas,
   fetchGrokQuotasWithToken,
   fetchKimiCodingQuotasWithToken,
+  fetchOpenCodeGoQuotas,
   fetchOpenRouterQuotasWithToken,
 } from "./fetch.js";
 
@@ -608,6 +609,75 @@ describe("fetchAntigravityQuotas", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer auth-gemini-key",
+        }),
+      }),
+    );
+  });
+});
+
+describe("fetchOpenCodeGoQuotas", () => {
+  it("returns config error when no credentials are found", async () => {
+    const auth = AuthStorage.inMemory({});
+    const origEnv = process.env;
+    process.env = { ...origEnv };
+    delete process.env.OPENCODE_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    delete process.env.OPENCODE_GO_AUTH_COOKIE;
+    delete process.env.OPENCODE_GO_WORKSPACE_ID;
+
+    const result = await fetchOpenCodeGoQuotas(auth);
+    process.env = origEnv;
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "config" },
+    });
+  });
+
+  it("fetches OpenCode Go usage via https://opencode.ai/zen/go/v1/usage with API key", async () => {
+    const auth = AuthStorage.inMemory({
+      "opencode-go": { type: "api_key", key: "opencode-key-123" },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          usage: {
+            rolling: { status: "ok", percent: 8, resetsAt: "2026-08-19T23:27:57.317Z" },
+            weekly: { status: "ok", percent: 61, resetsAt: "2026-08-24T00:00:00.317Z" },
+            monthly: { status: "ok", percent: 30, resetsAt: "2026-09-18T02:21:08.317Z" },
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchOpenCodeGoQuotas(auth);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("opencode-go");
+      expect(result.data.windows).toHaveLength(3);
+      expect(result.data.windows[0]).toMatchObject({
+        label: "5h Rolling",
+        usedPercent: 8,
+      });
+      expect(result.data.windows[1]).toMatchObject({
+        label: "Weekly",
+        usedPercent: 61,
+      });
+      expect(result.data.windows[2]).toMatchObject({
+        label: "Monthly",
+        usedPercent: 30,
+      });
+    }
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://opencode.ai/zen/go/v1/usage",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer opencode-key-123",
+          Accept: "application/json",
         }),
       }),
     );

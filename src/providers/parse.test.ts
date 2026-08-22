@@ -610,7 +610,45 @@ describe("parseSyntheticUsage", () => {
 });
 
 describe("parseOpenCodeGoUsage", () => {
-  it("parses rolling, weekly, and monthly windows", () => {
+  it("parses new api usage endpoint format (issue #23)", () => {
+    const windows = parseOpenCodeGoUsage({
+      usage: {
+        rolling: { status: "ok", percent: 8, resetsAt: "2026-08-19T23:27:57.317Z" },
+        weekly: { status: "ok", percent: 61, resetsAt: "2026-08-24T00:00:00.317Z" },
+        monthly: { status: "ok", percent: 30, resetsAt: "2026-09-18T02:21:08.317Z" },
+      },
+    });
+
+    expect(windows).toHaveLength(3);
+
+    expect(windows[0]).toMatchObject({
+      provider: "opencode-go",
+      label: "5h Rolling",
+      usedPercent: 8,
+      resetsAt: new Date("2026-08-19T23:27:57.317Z"),
+      windowSeconds: 5 * 60 * 60,
+    });
+
+    expect(windows[1]).toMatchObject({
+      provider: "opencode-go",
+      label: "Weekly",
+      usedPercent: 61,
+      resetsAt: new Date("2026-08-24T00:00:00.317Z"),
+      windowSeconds: 7 * 24 * 60 * 60,
+      showPace: true,
+    });
+
+    expect(windows[2]).toMatchObject({
+      provider: "opencode-go",
+      label: "Monthly",
+      usedPercent: 30,
+      resetsAt: new Date("2026-09-18T02:21:08.317Z"),
+      windowSeconds: 30 * 24 * 60 * 60,
+      showPace: true,
+    });
+  });
+
+  it("parses rolling, weekly, and monthly windows from legacy format", () => {
     const windows = parseOpenCodeGoUsage({
       rolling: {
         usagePercent: 35,

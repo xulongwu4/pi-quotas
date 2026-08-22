@@ -104,7 +104,7 @@ pi-quotas reads existing Pi auth entries from `~/.pi/agent/auth.json`:
 - `openrouter` — OpenRouter API key (Bearer token)
 - `synthetic` — Synthetic API key (set the `SYNTHETIC_API_KEY` environment variable)
 - `zai` — Z.ai (Zhipu AI / GLM Coding Plan) API key
-- `opencode-go` — OpenCode Go workspace ID and auth cookie (set the `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE` environment variables, or configure them in the OpenCode Go config file)
+- `opencode-go` — OpenCode Go API key (set the `OPENCODE_API_KEY` or `OPENCODE_GO_API_KEY` environment variable, or configure in Pi auth or OpenCode Go config file; legacy workspace ID and auth cookie also supported)
 - `kimi-coding` — Kimi Code OAuth access token
 - `grok` (or `xai`) — Grok OAuth access token (also automatically reads `~/.grok/auth.json` created by `grok login`)
 - `antigravity` (or `gemini` / `google`) — Google Antigravity OAuth token (also reads `~/.codexbar/antigravity/oauth_creds.json`)

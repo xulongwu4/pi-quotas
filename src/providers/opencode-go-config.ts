@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 export interface OpenCodeGoConfig {
-  workspaceId: string;
-  authCookie: string;
+  apiKey?: string;
+  authCookie?: string;
+  workspaceId?: string;
 }
 
 export type ResolvedOpenCodeGoConfig =
@@ -53,26 +54,37 @@ async function readConfigFile(
 export function resolveOpenCodeGoConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedOpenCodeGoConfig | null {
+  const apiKey = (env.OPENCODE_API_KEY ?? env.OPENCODE_GO_API_KEY)?.trim();
   const workspaceId = env.OPENCODE_GO_WORKSPACE_ID?.trim();
   const authCookie = env.OPENCODE_GO_AUTH_COOKIE?.trim();
 
-  if (!workspaceId && !authCookie) return null;
+  if (!apiKey && !workspaceId && !authCookie) return null;
 
-  if (workspaceId && authCookie) {
+  if (apiKey) {
     return {
       state: "configured",
-      config: { workspaceId, authCookie },
+      config: { apiKey, authCookie, workspaceId },
       source: "env",
     };
   }
 
-  return {
-    state: "incomplete",
-    source: "env",
-    missing: workspaceId
-      ? "OPENCODE_GO_AUTH_COOKIE"
-      : "OPENCODE_GO_WORKSPACE_ID",
-  };
+  if (authCookie) {
+    return {
+      state: "configured",
+      config: { authCookie, workspaceId },
+      source: "env",
+    };
+  }
+
+  if (workspaceId && !authCookie) {
+    return {
+      state: "incomplete",
+      source: "env",
+      missing: "OPENCODE_GO_AUTH_COOKIE or OPENCODE_API_KEY",
+    };
+  }
+
+  return null;
 }
 
 export async function resolveOpenCodeGoConfig(): Promise<ResolvedOpenCodeGoConfig> {
@@ -88,21 +100,24 @@ export async function resolveOpenCodeGoConfig(): Promise<ResolvedOpenCodeGoConfi
     }
 
     const config = fileResult.config;
+    const apiKey =
+      typeof config.apiKey === "string" ? config.apiKey.trim() : undefined;
     const workspaceId =
-      typeof config.workspaceId === "string" ? config.workspaceId.trim() : "";
+      typeof config.workspaceId === "string" ? config.workspaceId.trim() : undefined;
     const authCookie =
-      typeof config.authCookie === "string" ? config.authCookie.trim() : "";
+      typeof config.authCookie === "string" ? config.authCookie.trim() : undefined;
 
-    if (workspaceId && authCookie) {
+    if (apiKey || authCookie) {
       return {
         state: "configured",
-        config: { workspaceId, authCookie },
+        config: { apiKey, authCookie, workspaceId },
         source: path,
       };
     }
 
-    const missing = !workspaceId ? "workspaceId" : "authCookie";
-    return { state: "incomplete", source: path, missing };
+    if (workspaceId && !authCookie && !apiKey) {
+      return { state: "incomplete", source: path, missing: "apiKey or authCookie" };
+    }
   }
 
   return { state: "none" };
