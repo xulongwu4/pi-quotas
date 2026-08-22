@@ -28,18 +28,22 @@ export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
   antigravity: "Antigravity",
 };
 
+const DEFAULT_PROVIDER_TTL_MS = 60_000;
+
 const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
-  anthropic: 5 * 60_000,
-  "openai-codex": 60_000,
-  "github-copilot": 5 * 60_000,
-  openrouter: 60_000,
-  synthetic: 60_000,
-  zai: 60_000,
-  "opencode-go": 60_000,
-  "kimi-coding": 60_000,
-  grok: 60_000,
-  antigravity: 60_000,
+  anthropic: DEFAULT_PROVIDER_TTL_MS,
+  "openai-codex": DEFAULT_PROVIDER_TTL_MS,
+  "github-copilot": DEFAULT_PROVIDER_TTL_MS,
+  openrouter: DEFAULT_PROVIDER_TTL_MS,
+  synthetic: DEFAULT_PROVIDER_TTL_MS,
+  zai: DEFAULT_PROVIDER_TTL_MS,
+  "opencode-go": DEFAULT_PROVIDER_TTL_MS,
+  "kimi-coding": DEFAULT_PROVIDER_TTL_MS,
+  grok: DEFAULT_PROVIDER_TTL_MS,
+  antigravity: DEFAULT_PROVIDER_TTL_MS,
 };
+
+const ERROR_TTL_MS = 10_000;
 
 type CacheEntry = {
   result?: QuotasResult;
@@ -103,7 +107,10 @@ export async function fetchProviderQuotas(
     (rawProvider as SupportedQuotaProvider);
   const entry = cache.get(provider) ?? {};
   const now = Date.now();
-  const ttl = PROVIDER_TTLS_MS[provider];
+  const ttl =
+    entry.result && !entry.result.success
+      ? ERROR_TTL_MS
+      : PROVIDER_TTLS_MS[provider];
 
   if (
     !options?.force &&
