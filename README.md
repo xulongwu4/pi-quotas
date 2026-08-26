@@ -75,7 +75,7 @@ Use `/quotas:settings` to enable or disable:
 - Quota warning notifications
 - **Defer to Synthetic** — when both pi-quotas and [pi-synthetic](https://www.npmjs.com/package/@aliou/pi-synthetic) are loaded, pi-quotas hides its own Synthetic footer to avoid showing duplicate quota information. Enabled by default; disable if you prefer to see both footers.
 
-Settings can be saved globally (`~/.pi/agent/extensions/quotas.json`) or per-project (`.pi/quotas.json`). Run `/reload` after changing command visibility.
+Settings can be saved globally (`$PI_CODING_AGENT_DIR/quotas.json`, defaulting to `~/.pi/agent/quotas.json`) or per-project (`.pi/quotas.json`). Run `/reload` after changing command visibility.
 
 ## Supported providers
 

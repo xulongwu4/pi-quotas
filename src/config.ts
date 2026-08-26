@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, getAgentDir } from "@mariozechner/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 
 export type QuotasFeatureId =
@@ -73,7 +72,7 @@ class QuotasConfigStore {
   private cwd = process.cwd();
 
   private globalPath(): string {
-    return join(homedir(), ".pi", "agent", "extensions", "quotas.json");
+    return join(getAgentDir(), "quotas.json");
   }
 
   private localPath(): string {
