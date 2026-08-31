@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Stale extension ctx errors on session replacement**: the token status footer no longer throws "This extension ctx is stale after session replacement or reload" when a session replacement (`/new`, `/fork`, `/resume`) lands while a token-status update — or the shutdown handler itself — is touching the previous session's context. All context accesses now degrade gracefully, matching the guards already used by the usage-status extension.
+
 ## [0.4.0] - 2026-08-04
 
 ### Added

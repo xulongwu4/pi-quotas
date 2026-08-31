@@ -14,6 +14,37 @@ import { aggregateAllSessions, formatCost } from "../../lib/session-tokens.js";
 
 const EXTENSION_ID = "pi-quotas-token-status";
 const REFRESH_INTERVAL_MS = 60_000;
+const STALE_CONTEXT_MESSAGE = "This extension ctx is stale";
+
+function isStaleContextError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(STALE_CONTEXT_MESSAGE);
+}
+
+function getContextProvider(ctx: ExtensionContext): string | undefined {
+  try {
+    return ctx.model?.provider;
+  } catch (error) {
+    if (isStaleContextError(error)) return undefined;
+    throw error;
+  }
+}
+
+function setStatusSafely(
+  ctx: ExtensionContext | undefined,
+  text: string | undefined | ((ctx: ExtensionContext) => string),
+): boolean {
+  if (!ctx) return false;
+  try {
+    if (!ctx.hasUI) return true;
+    ctx.ui.setStatus(EXTENSION_ID, typeof text === "function" ? text(ctx) : text);
+    return true;
+  } catch (error) {
+    // A session replacement invalidates the old ctx; the replacement session
+    // re-arms status via its own session_start, so just drop the update.
+    if (isStaleContextError(error)) return false;
+    throw error;
+  }
+}
 
 /** Go tier limits (approximate, from docs) */
 const GO_LIMITS = {
@@ -105,28 +136,32 @@ function createTokenStatusRefresher() {
   let queued = false;
 
   async function update(ctx: ExtensionContext): Promise<void> {
-    if (!ctx.hasUI) return;
     if (inFlight) {
       queued = true;
       return;
     }
     inFlight = true;
     try {
+      if (!ctx.hasUI) return;
       const costs = await computeRollingCosts(ctx.cwd);
       if (!ctx.hasUI) return;
       lastCosts = costs;
-      const status = formatTokenStatus(ctx.ui.theme, costs);
-      ctx.ui.setStatus(EXTENSION_ID, status);
-    } catch {
-      ctx.ui.setStatus(
-        EXTENSION_ID,
-        ctx.ui.theme.fg("warning", "token tracking unavailable"),
+      setStatusSafely(ctx, (c) => formatTokenStatus(c.ui.theme, costs));
+    } catch (error) {
+      if (isStaleContextError(error)) {
+        activeContext = undefined;
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = undefined;
+        return;
+      }
+      setStatusSafely(ctx, (c) =>
+        c.ui.theme.fg("warning", "token tracking unavailable"),
       );
     } finally {
       inFlight = false;
-      if (queued) {
+      if (queued && activeContext) {
         queued = false;
-        void update(ctx);
+        void update(activeContext);
       }
     }
   }
@@ -134,8 +169,8 @@ function createTokenStatusRefresher() {
   return {
     async refreshFor(ctx: ExtensionContext): Promise<void> {
       activeContext = ctx;
-      if (!isGoProvider(ctx.model?.provider)) {
-        ctx.ui.setStatus(EXTENSION_ID, undefined);
+      if (!isGoProvider(getContextProvider(ctx))) {
+        setStatusSafely(ctx, undefined);
         return;
       }
       await update(ctx);
@@ -152,15 +187,12 @@ function createTokenStatusRefresher() {
       refreshTimer = undefined;
       activeContext = undefined;
       lastCosts = undefined;
-      ctx?.ui.setStatus(EXTENSION_ID, undefined);
+      setStatusSafely(ctx, undefined);
     },
     renderLast(ctx: ExtensionContext): boolean {
-      if (!lastCosts || !ctx.hasUI) return false;
-      ctx.ui.setStatus(
-        EXTENSION_ID,
-        formatTokenStatus(ctx.ui.theme, lastCosts),
-      );
-      return true;
+      const costs = lastCosts;
+      if (!costs) return false;
+      return setStatusSafely(ctx, (c) => formatTokenStatus(c.ui.theme, costs));
     },
   };
 }
@@ -172,12 +204,11 @@ export default async function (pi: ExtensionAPI) {
   let currentContext: ExtensionContext | undefined;
 
   function scheduleRefresh(ctx: ExtensionContext): void {
-    void refresher.refreshFor(ctx).catch(() => {
-      if (ctx.hasUI)
-        ctx.ui.setStatus(
-          EXTENSION_ID,
-          ctx.ui.theme.fg("warning", "token tracking unavailable"),
-        );
+    void refresher.refreshFor(ctx).catch((error) => {
+      if (isStaleContextError(error)) return;
+      setStatusSafely(ctx, (c) =>
+        c.ui.theme.fg("warning", "token tracking unavailable"),
+      );
     });
   }
 
@@ -197,8 +228,8 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
     if (!enabled) return;
-    if (!isGoProvider(ctx.model?.provider)) {
-      ctx.ui.setStatus(EXTENSION_ID, undefined);
+    if (!isGoProvider(getContextProvider(ctx))) {
+      setStatusSafely(ctx, undefined);
       return;
     }
     refresher.start();
@@ -208,7 +239,7 @@ export default async function (pi: ExtensionAPI) {
   pi.on("turn_end", (_event, ctx) => {
     currentContext = ctx;
     if (!enabled) return;
-    if (!isGoProvider(ctx.model?.provider)) return;
+    if (!isGoProvider(getContextProvider(ctx))) return;
     scheduleRefresh(ctx);
   });
 
@@ -218,7 +249,7 @@ export default async function (pi: ExtensionAPI) {
       refresher.stop(ctx);
       return;
     }
-    if (!isGoProvider(ctx.model?.provider)) {
+    if (!isGoProvider(getContextProvider(ctx))) {
       refresher.stop(ctx);
       return;
     }
