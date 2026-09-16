@@ -107,7 +107,7 @@ pi-quotas reads existing Pi auth entries from `~/.pi/agent/auth.json`:
 - `opencode-go` — OpenCode Go API key (set the `OPENCODE_API_KEY` or `OPENCODE_GO_API_KEY` environment variable, or configure in Pi auth or OpenCode Go config file; legacy workspace ID and auth cookie also supported)
 - `kimi-coding` — Kimi Code OAuth access token
 - `grok` (or `xai`) — Grok OAuth access token (also automatically reads `~/.grok/auth.json` created by `grok login`)
-- `antigravity` (or `gemini` / `google`) — Google Antigravity OAuth token (also reads `~/.codexbar/antigravity/oauth_creds.json`)
+- `antigravity` — Google Antigravity OAuth token from `/login antigravity` (also reads `~/.codexbar/antigravity/oauth_creds.json`)
 
 No additional setup is required - if Pi can use the provider, pi-quotas can check its quotas. For Synthetic, export `SYNTHETIC_API_KEY` in your shell or Pi environment.
 

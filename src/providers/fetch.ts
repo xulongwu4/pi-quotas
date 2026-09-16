@@ -593,76 +593,108 @@ export function antigravityLocalAuthToken(): string | undefined {
   return undefined;
 }
 
+// Wire fingerprint of the Antigravity CLI (same as the pi-antigravity extension).
+const ANTIGRAVITY_USER_AGENT =
+  "antigravity/cli/1.1.23 (aidev_client; os_type=linux; arch=amd64; cl=974125021; auth_method=consumer)";
+
+/**
+ * Quota is tracked per API host. pi-antigravity sends traffic to the `daily-`
+ * host by default, and production `cloudcode-pa` only echoes a static catalog
+ * (remainingFraction 1.0 everywhere), so we must query the same host it uses.
+ */
+function antigravityBaseUrl(): string {
+  return (
+    process.env.ANTIGRAVITY_BASE_URL ??
+    process.env.NOAGY_BASE_URL ??
+    "https://daily-cloudcode-pa.googleapis.com"
+  ).replace(/\/+$/, "");
+}
+
+/**
+ * pi-antigravity's `authStorage.getApiKey()` returns `{"token","projectId"}` as a
+ * JSON string rather than a bare bearer token.
+ */
+function parseAntigravityApiKey(raw: unknown): { token?: string; projectId?: string } {
+  if (typeof raw !== "string" || !raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.token === "string")
+      return { token: parsed.token, projectId: parsed.projectId };
+  } catch {
+    // Plain bearer token
+  }
+  return { token: raw };
+}
+
 export async function fetchAntigravityQuotasWithToken(
   accessToken: string | undefined,
   signal?: AbortSignal,
+  projectId?: string,
 ): Promise<QuotasResult> {
   if (!accessToken)
     return failure("No Antigravity/Google access token found", "config");
 
-  // Primary: fetchAvailableModels endpoint (returns all model quotas including Gemini and Claude/GPT)
-  const result = await fetchJson(
-    "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+  const base = antigravityBaseUrl();
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent": ANTIGRAVITY_USER_AGENT,
+  };
+
+  // Primary: grouped 5h/7d buckets. Licensed accounts only — free tier gets
+  // 403 SUBSCRIPTION_REQUIRED, so fall through on any failure.
+  const summary = await fetchJson(
+    `${base}/v1internal:retrieveUserQuotaSummary`,
+    { method: "POST", headers, body: "{}" },
+    signal,
+  );
+  if (summary.ok) {
+    const windows = parseAntigravityUsage(summary.data);
+    if (windows.length > 0) return success("antigravity", windows);
+  }
+
+  // Fallback: per-model quotaInfo from fetchAvailableModels (works for every tier).
+  const models = await fetchJson(
+    `${base}/v1internal:fetchAvailableModels`,
     {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": "antigravity",
-      },
-      body: "{}",
+      headers,
+      body: JSON.stringify(projectId ? { project: projectId } : {}),
     },
     signal,
   );
-
-  if (result.ok) {
-    return success("antigravity", parseAntigravityUsage(result.data));
-  }
-
-  // Fallback: retrieveUserQuota
-  const fallback = await fetchJson(
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": "antigravity",
-      },
-      body: "{}",
-    },
-    signal,
-  );
-
-  if (fallback.ok) {
-    return success("antigravity", parseAntigravityUsage(fallback.data));
-  }
-
-  return failure(result.message, result.kind);
+  if (!models.ok) return failure(models.message, models.kind);
+  return success("antigravity", parseAntigravityUsage(models.data));
 }
 
 export async function fetchAntigravityQuotas(
   authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
-  const antigravityCred = authStorage.get("antigravity") as any;
-  const geminiCred = authStorage.get("gemini") as any;
-  const googleCred = authStorage.get("google") as any;
+  const stored = authStorage.get("antigravity") as any;
+  let projectId: string | undefined =
+    (typeof stored?.projectId === "string" ? stored.projectId : undefined) ??
+    process.env.ANTIGRAVITY_PROJECT_ID;
+  let token: string | undefined;
 
-  const token =
-    (typeof antigravityCred === "object" ? antigravityCred?.access ?? antigravityCred?.key : undefined) ??
-    (await providerAccessToken(authStorage, "antigravity")) ??
-    (typeof geminiCred === "object" ? geminiCred?.access ?? geminiCred?.key : undefined) ??
-    (await providerAccessToken(authStorage, "gemini")) ??
-    (typeof googleCred === "object" ? googleCred?.access ?? googleCred?.key : undefined) ??
-    (await providerAccessToken(authStorage, "google")) ??
+  // getApiKey() refreshes expired OAuth tokens through the registered provider,
+  // so prefer it over the raw stored `access` field. (Plain Gemini API keys
+  // under `google`/`gemini` are not accepted by this OAuth-only endpoint.)
+  const key = parseAntigravityApiKey(
+    await providerAccessToken(authStorage, "antigravity").catch(() => undefined),
+  );
+  token = key.token;
+  projectId = key.projectId ?? projectId;
+
+  token ??=
+    stored?.access ??
+    stored?.key ??
     process.env.ANTIGRAVITY_OAUTH_TOKEN ??
     process.env.ANTIGRAVITY_API_KEY ??
     process.env.ANTIGRAVITY_TOKEN ??
     antigravityLocalAuthToken();
-  return fetchAntigravityQuotasWithToken(token, signal);
+  return fetchAntigravityQuotasWithToken(token, signal, projectId);
 }
 
 export const PROVIDER_FETCHERS = {

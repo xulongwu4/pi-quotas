@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-16
+
 ### Fixed
+- **Antigravity quotas**: `/antigravity:quotas` now returns data. Quota calls target `daily-cloudcode-pa.googleapis.com` (the host pi-antigravity actually sends traffic to; production only echoes a static catalog) with the CLI User-Agent and `{ project }` body, honouring `ANTIGRAVITY_BASE_URL`. Token resolution now goes through `authStorage.getApiKey()` (which refreshes expired OAuth tokens) and unwraps pi-antigravity's JSON `{ token, projectId }` key; plain `google`/`gemini` API keys are no longer tried since the endpoint is OAuth-only. `retrieveUserQuotaSummary` is tried first for exact 5h/7d buckets, falling back to per-model `fetchAvailableModels`. The parser no longer discards fully-unused (100% remaining) pools.
 - **Stale extension ctx errors on session replacement**: the token status footer no longer throws "This extension ctx is stale after session replacement or reload" when a session replacement (`/new`, `/fork`, `/resume`) lands while a token-status update — or the shutdown handler itself — is touching the previous session's context. All context accesses now degrade gracefully, matching the guards already used by the usage-status extension.
 
 ## [0.4.0] - 2026-08-04

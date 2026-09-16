@@ -506,19 +506,53 @@ describe("fetchAntigravityQuotasWithToken", () => {
       });
     }
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
           Authorization: "Bearer antigravity-token",
-          "User-Agent": "antigravity",
+          "User-Agent": expect.stringContaining("antigravity/cli/"),
         }),
       }),
     );
   });
 
+  it("falls back to fetchAvailableModels with project id when summary is unlicensed", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "SUBSCRIPTION_REQUIRED" } }), { status: 403 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            models: {
+              "gemini-2.5-pro": { quotaInfo: { remainingFraction: 0.99, resetTime: "2099-01-01T00:00:00Z" } },
+              "claude-sonnet-4-6": { quotaInfo: { remainingFraction: 1, resetTime: "2099-01-01T00:00:00Z" } },
+              chat_20706: { quotaInfo: { remainingFraction: 1 } },
+            },
+          }),
+          { status: 200 },
+        ),
+      ) as any;
+
+    const result = await fetchAntigravityQuotasWithToken("antigravity-token", undefined, "proj-123");
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      expect.objectContaining({ body: JSON.stringify({ project: "proj-123" }) }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.windows.map((w) => [w.label, w.usedPercent])).toEqual([
+        ["Gemini 7d", 1],
+        ["Claude/GPT 7d", 0],
+      ]);
+    }
+  });
+
   it("handles HTTP error", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
+    globalThis.fetch = vi.fn().mockImplementation(async () =>
       new Response(
         JSON.stringify({ error: { message: "Permission denied" } }),
         { status: 403 },
@@ -536,7 +570,7 @@ describe("fetchAntigravityQuotasWithToken", () => {
 describe("fetchAntigravityQuotas", () => {
   it("uses authStorage antigravity token if available", async () => {
     const auth = AuthStorage.inMemory({
-      antigravity: { type: "api_key", key: "auth-antigravity-key" },
+      antigravity: { type: "api_key", key: JSON.stringify({ token: "auth-antigravity-key", projectId: "proj-1" }) },
     });
 
     globalThis.fetch = vi.fn().mockResolvedValue(
@@ -565,7 +599,7 @@ describe("fetchAntigravityQuotas", () => {
     const result = await fetchAntigravityQuotas(auth);
     expect(result.success).toBe(true);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer auth-antigravity-key",
@@ -574,9 +608,10 @@ describe("fetchAntigravityQuotas", () => {
     );
   });
 
-  it("falls back to authStorage gemini key if antigravity key is absent", async () => {
+  it("ignores a plain google API key and falls back to the stored antigravity access token", async () => {
     const auth = AuthStorage.inMemory({
-      gemini: { type: "api_key", key: "auth-gemini-key" },
+      google: { type: "api_key", key: "AIza-not-an-oauth-token" },
+      antigravity: { type: "oauth", access: "stored-access", refresh: "r", expires: Date.now() + 60_000 } as any,
     });
 
     globalThis.fetch = vi.fn().mockResolvedValue(
@@ -605,10 +640,10 @@ describe("fetchAntigravityQuotas", () => {
     const result = await fetchAntigravityQuotas(auth);
     expect(result.success).toBe(true);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
       expect.objectContaining({
         headers: expect.objectContaining({
-          Authorization: "Bearer auth-gemini-key",
+          Authorization: "Bearer stored-access",
         }),
       }),
     );

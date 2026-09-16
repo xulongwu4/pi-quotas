@@ -904,9 +904,9 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
     }
   }
 
-  // 3) fetchAvailableModels format (models dictionary)
-  // Note: If every model in fetchAvailableModels reports remainingFraction: 1.0 (static catalog artifact),
-  // this indicates the remote API is only echoing model availability rather than dynamic consumption.
+  // 3) fetchAvailableModels format (models dictionary). Every model in a pool
+  // shares one fraction/resetTime; remainingFraction 1.0 is real "unused" data
+  // when querying the host that actually serves traffic (see antigravityBaseUrl).
   if (data?.models && typeof data.models === "object") {
     const models = data.models as Record<string, any>;
     let minGeminiFraction = 1;
@@ -915,13 +915,11 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
     let claudeGptResetTime: string | undefined;
     let hasGemini = false;
     let hasClaudeGpt = false;
-    let allFractionsAreOne = true;
 
     for (const [modelId, modelObj] of Object.entries(models)) {
       if (!modelObj || typeof modelObj !== "object") continue;
       const fraction = modelObj?.quotaInfo?.remainingFraction;
       if (typeof fraction !== "number" || !Number.isFinite(fraction)) continue;
-      if (fraction < 0.999) allFractionsAreOne = false;
       const resetTime = modelObj?.quotaInfo?.resetTime;
       const id = modelId.toLowerCase();
 
@@ -944,37 +942,26 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
       }
     }
 
-    if (!allFractionsAreOne) {
-      if (hasGemini) {
-        const usedPercent = Math.max(0, Math.min(100, Math.round((1 - minGeminiFraction) * 100)));
-        windows.push({
-          provider: "antigravity",
-          label: "Gemini 5h",
-          usedPercent,
-          resetsAt: parseDateish(geminiResetTime),
-          windowSeconds: 5 * 60 * 60,
-          usedValue: usedPercent,
-          limitValue: 100,
-          showPace: false,
-          nextLabel: "Resets",
-        });
-      }
-
-      if (hasClaudeGpt) {
-        const usedPercent = Math.max(0, Math.min(100, Math.round((1 - minClaudeGptFraction) * 100)));
-        windows.push({
-          provider: "antigravity",
-          label: "Claude/GPT 5h",
-          usedPercent,
-          resetsAt: parseDateish(claudeGptResetTime),
-          windowSeconds: 5 * 60 * 60,
-          usedValue: usedPercent,
-          limitValue: 100,
-          showPace: false,
-          nextLabel: "Resets",
-        });
-      }
-    }
+    // ponytail: the API doesn't say which pool a per-model bucket is; infer 7d vs 5h
+    // from how far out the reset is. Use retrieveUserQuotaSummary for exact buckets.
+    const pushPool = (prefix: string, fraction: number, resetTime: string | undefined) => {
+      const resetsAt = parseDateish(resetTime);
+      const isWeekly = resetsAt.getTime() - Date.now() > 5 * 60 * 60 * 1000;
+      const usedPercent = Math.max(0, Math.min(100, Math.round((1 - fraction) * 100)));
+      windows.push({
+        provider: "antigravity",
+        label: `${prefix} ${isWeekly ? "7d" : "5h"}`,
+        usedPercent,
+        resetsAt,
+        windowSeconds: isWeekly ? 7 * 24 * 60 * 60 : 5 * 60 * 60,
+        usedValue: usedPercent,
+        limitValue: 100,
+        showPace: isWeekly,
+        nextLabel: "Resets",
+      });
+    };
+    if (hasGemini) pushPool("Gemini", minGeminiFraction, geminiResetTime);
+    if (hasClaudeGpt) pushPool("Claude/GPT", minClaudeGptFraction, claudeGptResetTime);
   }
 
   windows.sort((a, b) => a.windowSeconds - b.windowSeconds);
