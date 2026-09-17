@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-17
+
+### Changed
+- **`/quotas` only lists configured providers**: providers with no credentials anywhere Pi looks (`auth.json`, resolved provider auth, environment variables, CLI config files) are hidden from the combined dashboard instead of rendering a "No … token found" row. Detection reuses the existing `config` error kind, which every fetcher returns before making a network call, so nothing extra is requested. Single-provider commands (`/grok:quotas`, `/devin:quotas`, …) still report missing credentials, since the user asked for that provider by name; an all-unconfigured dashboard shows "No configured providers".
+
 ## [0.5.0] - 2026-09-17
 
 ### Added

@@ -152,6 +152,14 @@ export class QuotasComponent implements Component {
         ),
       );
     }
+    if (snapshots.length === 0 && pending === 0) {
+      lines.push(
+        truncateToWidth(
+          `  ${this.theme.fg("dim", "No configured providers")}`,
+          maxWidth,
+        ),
+      );
+    }
     if (lines.at(-1) === "") lines.pop();
     return lines;
   }

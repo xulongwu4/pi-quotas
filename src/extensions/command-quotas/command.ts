@@ -25,6 +25,7 @@ async function openQuotaView(
     onSnapshot?: (snapshot: Snapshot) => void,
   ) => Promise<Snapshot[]>,
   ctx: ExtensionCommandContext,
+  include: (snapshot: Snapshot) => boolean = () => true,
 ): Promise<void> {
   const result = await ctx.ui.custom<null>((tui, theme, _kb, done) => {
     let controller = new AbortController();
@@ -54,8 +55,12 @@ async function openQuotaView(
       // in-flight load, never its successor.
       const loadController = controller;
       const collected: Snapshot[] = [];
+      // Count every arrival, not just the displayed ones, so the "still
+      // loading" note reaches zero when filtered providers resolve.
+      let received = 0;
       const onSnapshot = (snapshot: Snapshot): void => {
-        collected.push(snapshot);
+        received++;
+        if (include(snapshot)) collected.push(snapshot);
         if (loadController.signal.aborted) return;
         // Maintain catalog order incrementally: each arrival is sorted into
         // place, so rows never jump when a slow provider settles late.
@@ -67,14 +72,13 @@ async function openQuotaView(
         component.setState({
           type: "streaming",
           snapshots: [...collected],
-          pending: Math.max(
-            0,
-            SUPPORTED_PROVIDERS.length - collected.length,
-          ),
+          pending: Math.max(0, SUPPORTED_PROVIDERS.length - received),
         });
         tui.requestRender();
       };
-      const snapshots = await loadSnapshots(force, loadController.signal, onSnapshot);
+      const snapshots = (
+        await loadSnapshots(force, loadController.signal, onSnapshot)
+      ).filter(include);
       if (loadController.signal.aborted) return;
       // The loader's return value is authoritative: canonical order, the
       // only source for loaders that do not stream, and the transition to
@@ -110,6 +114,16 @@ async function openQuotaView(
  * dumping raw JSON — which previously leaked raw HTTP error bodies — and
  * skips "not_applicable" providers since they have nothing to report.
  */
+/**
+ * A provider whose fetcher reports "config" has no credentials anywhere Pi
+ * looks (auth.json, provider auth, env vars, CLI config), i.e. it is not
+ * configured — the combined /quotas view hides it instead of listing an error
+ * row. Single-provider commands still report it: the user asked by name.
+ */
+export function isConfiguredSnapshot({ result }: Snapshot): boolean {
+  return result.success || result.error.kind !== "config";
+}
+
 function formatSnapshotsForNotify(snapshots: Snapshot[]): string {
   const lines: string[] = [];
   for (const { provider, result } of snapshots) {
@@ -143,6 +157,7 @@ export function registerQuotasCommands(pi: ExtensionAPI): void {
             onSnapshot,
           }),
         ctx,
+        isConfiguredSnapshot,
       );
     },
   });
