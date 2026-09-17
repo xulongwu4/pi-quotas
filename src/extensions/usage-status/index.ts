@@ -58,12 +58,16 @@ function getContextProvider(
   }
 }
 
-/** Footer reset text: hours only once the wait is an hour or more. */
+/** Footer reset text: `xd xh` past a day, `xh` past an hour, else minutes. */
 function formatFooterReset(date: Date): string {
   const ms = date.getTime() - Date.now();
-  if (ms >= 60 * 60 * 1000) {
-    return `${Math.ceil(ms / (60 * 60 * 1000))}h`;
+  const totalHours = Math.ceil(ms / (60 * 60 * 1000));
+  if (totalHours >= 24) {
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
   }
+  if (totalHours >= 1) return `${totalHours}h`;
   return formatTimeRemaining(date);
 }
 
