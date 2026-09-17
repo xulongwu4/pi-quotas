@@ -6,6 +6,7 @@ import { parseKimiCodingUsage } from "./providers.js";
 import { parseOpenRouterUsage } from "./providers.js";
 import { parseSyntheticUsage } from "./providers.js";
 import { parseZaiUsage } from "./providers.js";
+import { parseDevinUsage } from "./providers.js";
 import { parseOpenCodeGoUsage } from "./providers.js";
 import { parseGrokUsage } from "./providers.js";
 import { parseAntigravityUsage } from "./providers.js";
@@ -56,7 +57,7 @@ describe("parseAnthropicUsage", () => {
     expect(extra).toMatchObject({
       provider: "anthropic",
       label: "Extra (AUD)",
-      isCurrency: true,
+      kind: "currency",
       usedPercent: 71.83,
       usedValue: 215.48,
       limitValue: 300,
@@ -228,7 +229,7 @@ describe("parseCodexUsage", () => {
 
     const credit = windows.find((w) => w.label === "Credits");
     expect(credit).toBeDefined();
-    expect(credit).toMatchObject({ isCurrency: true, usedValue: 4200 });
+    expect(credit).toMatchObject({ kind: "currency", usedValue: 4200 });
   });
 
   it("includes spend control status", () => {
@@ -382,7 +383,7 @@ describe("parseOpenRouterUsage", () => {
       provider: "openrouter",
       label: "Monthly Budget",
       usedPercent: 30, // 15/50 = 30%
-      isCurrency: true,
+      kind: "currency",
       usedValue: 15,
       limitValue: 50,
       showPace: true,
@@ -427,7 +428,7 @@ describe("parseOpenRouterUsage", () => {
       provider: "openrouter",
       label: "Credits Remaining",
       usedPercent: 0,
-      isCurrency: true,
+      kind: "currency",
       usedValue: 100,
       limitValue: 100,
       showPace: false,
@@ -544,7 +545,7 @@ describe("parseSyntheticUsage", () => {
     const credits = windows.find((w) => w.label === "Credits / week");
     expect(credits).toBeDefined();
     expect(credits!.usedPercent).toBeCloseTo(3.61, 1);
-    expect(credits!.isCurrency).toBe(true);
+    expect(credits!.kind).toBe("currency");
     expect(credits!.limitValue).toBe(24);
     expect(credits!.usedValue).toBeCloseTo(0.87, 1);
     expect(credits!.paceScale).toBe(1 / 7);
@@ -886,8 +887,6 @@ describe("parseZaiUsage", () => {
       label: "5h",
       usedPercent: 8,
       windowSeconds: 5 * 60 * 60,
-      usedValue: 8,
-      limitValue: 100,
     });
     expect(windows[1]).toMatchObject({
       provider: "zai",
@@ -943,8 +942,7 @@ describe("parseGrokUsage", () => {
       label: "Subscription",
       usedPercent: 42.5,
       resetsAt: new Date("2026-05-01T00:00:00Z"),
-      limitValue: 100,
-      usedValue: 42.5,
+      kind: "percent",
       showPace: true,
     });
   });
@@ -1074,5 +1072,139 @@ describe("parseAntigravityUsage", () => {
   it("returns empty array for invalid payload", () => {
     expect(parseAntigravityUsage(null)).toHaveLength(0);
     expect(parseAntigravityUsage({})).toHaveLength(0);
+  });
+});
+
+describe("parseDevinUsage", () => {
+  it("maps daily, weekly, and credits windows from GetUserStatus", () => {
+    const windows = parseDevinUsage({
+      userStatus: {
+        planStatus: {
+          dailyQuotaRemainingPercent: 100,
+          dailyQuotaResetAtUnix: "1789632000",
+          weeklyQuotaRemainingPercent: 75,
+          weeklyQuotaResetAtUnix: "1789891200",
+          availableFlexCredits: 40,
+          planInfo: { planName: "Free", monthlyPromptCredits: 100 },
+        },
+      },
+    });
+
+    expect(windows).toHaveLength(3);
+    expect(windows[0]).toMatchObject({
+      provider: "devin",
+      label: "Daily",
+      usedPercent: 0,
+      resetsAt: new Date(1789632000 * 1000),
+      windowSeconds: 24 * 60 * 60,
+      kind: "percent",
+    });
+    expect(windows[1]).toMatchObject({
+      provider: "devin",
+      label: "Weekly",
+      usedPercent: 25,
+      resetsAt: new Date(1789891200 * 1000),
+      windowSeconds: 7 * 24 * 60 * 60,
+      kind: "percent",
+    });
+    expect(windows[2]).toMatchObject({
+      provider: "devin",
+      label: "Credits / month",
+      usedPercent: 60,
+      usedValue: 60,
+      limitValue: 100,
+      kind: "counts",
+      windowSeconds: 0,
+      resetsAt: null,
+    });
+  });
+
+  it("prefers availablePromptCredits over availableFlexCredits", () => {
+    const windows = parseDevinUsage({
+      planStatus: {
+        availablePromptCredits: 90,
+        availableFlexCredits: 10,
+        planInfo: { monthlyPromptCredits: 100 },
+      },
+    });
+
+    const credits = windows.find((w) => w.label === "Credits / month");
+    expect(credits?.usedValue).toBe(10);
+  });
+
+  it("clamps out-of-range remaining percentages into usedValue", () => {
+    const windows = parseDevinUsage({
+      planStatus: {
+        dailyQuotaRemainingPercent: 110,
+        weeklyQuotaRemainingPercent: -10,
+      },
+    });
+
+    expect(windows[0]).toMatchObject({
+      label: "Daily",
+      usedPercent: 0,
+    });
+    expect(windows[1]).toMatchObject({
+      label: "Weekly",
+      usedPercent: 100,
+    });
+  });
+
+  it("skips the credits window when no available-credit field is present", () => {
+    const windows = parseDevinUsage({
+      planStatus: { planInfo: { monthlyPromptCredits: 100 } },
+    });
+
+    expect(windows).toHaveLength(0);
+  });
+
+  it("skips JSON-null percent fields instead of rendering fully used", () => {
+    const windows = parseDevinUsage({
+      userStatus: {
+        planStatus: {
+          dailyQuotaRemainingPercent: null,
+          weeklyQuotaRemainingPercent: 50,
+        },
+      },
+    });
+
+    // Number(null) === 0, so an explicit null guard is required
+    expect(windows).toHaveLength(1);
+    expect(windows[0].label).toBe("Weekly");
+    expect(windows[0].usedPercent).toBe(50);
+  });
+
+  it("skips the credits window when available-credit fields are JSON null", () => {
+    const windows = parseDevinUsage({
+      planStatus: {
+        availablePromptCredits: null,
+        availableFlexCredits: null,
+        planInfo: { monthlyPromptCredits: 100 },
+      },
+    });
+
+    // Number(null) === 0, so an explicit null guard is required
+    expect(windows).toHaveLength(0);
+  });
+
+  it("maps overflow timestamps to null instead of Invalid Date", () => {
+    const windows = parseDevinUsage({
+      planStatus: {
+        dailyQuotaRemainingPercent: 50,
+        dailyQuotaResetAtUnix: 9007199254740991,
+      },
+    });
+
+    // Beyond Date's maximum range: must be null, never an Invalid Date
+    expect(windows).toHaveLength(1);
+    expect(windows[0].resetsAt).toBeNull();
+  });
+
+  it("skips windows with missing data", () => {
+    expect(parseDevinUsage({})).toHaveLength(0);
+    expect(parseDevinUsage({ userStatus: { planStatus: {} } })).toHaveLength(0);
+    expect(
+      parseDevinUsage({ planStatus: { dailyQuotaRemainingPercent: 50 } }),
+    ).toHaveLength(1);
   });
 });

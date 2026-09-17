@@ -15,9 +15,10 @@ import {
   isSupportedProvider,
   PROVIDER_LABELS,
 } from "../../lib/quotas.js";
+import { formatQuotaUsage } from "../../utils/quotas-format.js";
 import {
   assessWindow,
-  formatTimeRemaining,
+  formatResetTiming,
   type RiskSeverity,
 } from "../../utils/quotas-severity.js";
 
@@ -92,8 +93,12 @@ export default async function (pi: ExtensionAPI) {
 
     const lines = toNotify.map(({ window, assessment }) => {
       const projected = Math.round(assessment.projectedPercent);
-      const used = Math.round(window.usedPercent);
-      return `- ${window.label}: ${used}% used, projected ${projected}% (${assessment.severity}), resets in ${formatTimeRemaining(window.resetsAt)}`;
+      // Balance-style windows have no reset to announce
+      const resetText = window.resetsAt != null
+        ? `, resets ${formatResetTiming(window.resetsAt)}`
+        : "";
+      const usage = formatQuotaUsage(window);
+      return `- ${window.label}: ${usage}, projected ${projected}% (${assessment.severity})${resetText}`;
     });
 
     const level = toNotify.some(

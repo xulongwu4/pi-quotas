@@ -22,7 +22,7 @@ import {
 } from "../../lib/quotas.js";
 import {
   assessWindow,
-  formatTimeRemaining,
+  formatResetTiming,
 } from "../../utils/quotas-severity.js";
 import type { QuotaWindow } from "../../types/quotas.js";
 import { formatWindowStatus, type WindowStatus } from "./format-status.js";
@@ -58,33 +58,39 @@ function getContextProvider(
   }
 }
 
-function formatFooterResetTime(resetsAt: string): string {
-  const remaining = formatTimeRemaining(new Date(resetsAt));
-  return remaining === "now" ? "now" : `in ${remaining}`;
-}
-
 export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
   const theme = ctx.ui.theme;
   return windows
     .map((w) => {
       const core = formatWindowStatus(theme, w);
-      const reset = w.resetsAt ? theme.fg("dim", ` (↺${formatFooterResetTime(w.resetsAt)})`) : "";
+      const reset = w.resetsAt ? theme.fg("dim", ` (↺${formatResetTiming(w.resetsAt)})`) : "";
       return `${core}${reset}`;
     })
     .join(" ");
 }
 
 export function toWindowStatus(window: QuotaWindow): WindowStatus {
-  return {
+  const common = {
+    provider: window.provider,
     label: window.label,
     usedPercent: window.usedPercent,
     severity: assessWindow(window).severity,
-    resetsAt: window.resetsAt.getTime() > 0 ? window.resetsAt.toISOString() : null,
+    resetsAt: window.resetsAt,
     limited: window.limited ?? false,
-    isCurrency: window.isCurrency,
-    usedValue: window.usedValue,
-    limitValue: window.limitValue,
   };
+  switch (window.kind) {
+    case "percent":
+    case "spend-cap":
+      return { ...common, kind: window.kind };
+    case "counts":
+    case "currency":
+      return {
+        ...common,
+        kind: window.kind,
+        usedValue: window.usedValue,
+        limitValue: window.limitValue,
+      };
+  }
 }
 
 export function toStatusWindows(windows: QuotaWindow[]): WindowStatus[] {
@@ -104,8 +110,13 @@ function createStatusRefresher() {
   let activeContext: ExtensionContext | undefined;
   let activeProvider: string | undefined;
   let lastStatus: WindowStatus[] | undefined;
-  let inFlight = false;
-  let queued = false;
+  // Serialize updates so refreshFor awaits its own provider refresh instead
+  // of returning early behind an older in-flight request.
+  let updateTail: Promise<void> = Promise.resolve();
+  // Aborted when the provider switches or the refresher deactivates, so a
+  // slow fetch (e.g. Devin GetUserStatus) cannot gate the next provider's
+  // update for FETCH_TIMEOUT_MS.
+  let fetchController: AbortController | undefined;
 
   // Bumped whenever the active ctx/provider is replaced or the refresher stops.
   // This prevents an old async fetch from writing to a replacement session.
@@ -117,7 +128,8 @@ function createStatusRefresher() {
     activeContext = undefined;
     activeProvider = undefined;
     lastStatus = undefined;
-    queued = false;
+    fetchController?.abort();
+    fetchController = undefined;
     generation++;
   }
 
@@ -136,21 +148,33 @@ function createStatusRefresher() {
     }
   }
 
-  async function update(ctx: ExtensionContext, requestGeneration = generation): Promise<void> {
-    if (inFlight) {
-      queued = true;
-      return;
-    }
-    inFlight = true;
-    try {
-      if (requestGeneration !== generation || activeContext !== ctx) return;
-      if (!ctx.hasUI || !activeProvider || !isSupportedProvider(activeProvider)) return;
+  async function performUpdate(
+    ctx: ExtensionContext,
+    requestGeneration: number,
+  ): Promise<void> {
+    if (requestGeneration !== generation) return;
+    if (!ctx.hasUI || !activeProvider || !isSupportedProvider(activeProvider)) return;
 
-      const provider = activeProvider;
-      const result = await fetchProviderQuotas(quotaAuthStorage(ctx.modelRegistry), provider);
-      if (requestGeneration !== generation || activeContext !== ctx) return;
+    const provider = activeProvider;
+    const controller = new AbortController();
+    fetchController = controller;
+    try {
+      const result = await fetchProviderQuotas(
+        quotaAuthStorage(ctx.modelRegistry),
+        provider,
+        { signal: controller.signal },
+      );
+      if (
+        controller.signal.aborted ||
+        requestGeneration !== generation
+      ) {
+        return;
+      }
 
       if (!result.success) {
+        // Shared-cache eviction can cancel the provider request without
+        // aborting this UI controller; cancellation is normal control flow.
+        if (result.error.kind === "cancelled") return;
         // A "not applicable" result (e.g. a direct Anthropic API key with no
         // OAuth subscription usage) is expected, not a failure — show nothing
         // rather than a persistent "usage unavailable" warning.
@@ -158,7 +182,9 @@ function createStatusRefresher() {
           setStatusSafely(ctx, undefined);
           return;
         }
-        setStatusSafely(ctx, (ctx) => ctx.ui.theme.fg("warning", "usage unavailable"));
+        setStatusSafely(ctx, (ctx) =>
+          ctx.ui.theme.fg("warning", "usage unavailable"),
+        );
         return;
       }
       const windows: WindowStatus[] = toStatusWindows(result.data.windows);
@@ -167,17 +193,26 @@ function createStatusRefresher() {
       setStatusSafely(ctx, status);
     } catch (error) {
       if (isStaleContextError(error)) {
-        if (activeContext === ctx) deactivate();
+        if (requestGeneration === generation) deactivate();
         return;
       }
-      setStatusSafely(ctx, (ctx) => ctx.ui.theme.fg("warning", "usage unavailable"));
+      setStatusSafely(ctx, (ctx) =>
+        ctx.ui.theme.fg("warning", "usage unavailable"),
+      );
     } finally {
-      inFlight = false;
-      if (queued && activeContext) {
-        queued = false;
-        void update(activeContext, generation).catch(() => undefined);
-      }
+      if (fetchController === controller) fetchController = undefined;
     }
+  }
+
+  function update(
+    ctx: ExtensionContext,
+    requestGeneration = generation,
+  ): Promise<void> {
+    const task = updateTail
+      .catch(() => undefined)
+      .then(() => performUpdate(ctx, requestGeneration));
+    updateTail = task;
+    return task;
   }
 
   return {
@@ -188,6 +223,9 @@ function createStatusRefresher() {
       activeContext = ctx;
       const prevProvider = activeProvider;
       activeProvider = getContextProvider(ctx, providerOverride);
+      // Abort the previous provider's in-flight fetch so a provider switch
+      // is not stalled on it (e.g. leaving a slow Devin GetUserStatus).
+      if (prevProvider !== activeProvider) fetchController?.abort();
       generation++;
       const requestGeneration = generation;
       if (!activeProvider || !isSupportedProvider(activeProvider)) {

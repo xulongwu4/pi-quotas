@@ -8,6 +8,7 @@ import {
   parseAnthropicUsage,
   parseAntigravityUsage,
   parseCodexUsage,
+  parseDevinUsage,
   parseGitHubCopilotUsage,
   parseGrokUsage,
   parseKimiCodingUsage,
@@ -127,7 +128,7 @@ async function fetchJson(
       if (isTimeoutReason(combined.reason)) {
         return { ok: false, message: "Request timed out", kind: "timeout" };
       }
-      return { ok: false, message: "Request cancelled", kind: "cancelled" };
+      return { ok: false, ...cancelledError() };
     }
     const message = err instanceof Error ? err.message : "Unknown error";
     return { ok: false, message, kind: "network" };
@@ -697,6 +698,68 @@ export async function fetchAntigravityQuotas(
   return fetchAntigravityQuotasWithToken(token, signal, projectId);
 }
 
+/**
+ * GetUserStatus is a catalog-class Codeium RPC: pi-devin hardcodes its
+ * catalog calls to this host even when models.json routes inference through
+ * a proxy, so quota calls follow the same rule. DEVIN_API_SERVER_URL
+ * overrides for proxies that implement the full API surface.
+ *
+ * ponytail: GetUserStatus returns the full ~370KB model catalog alongside
+ * the ~1KB of planStatus we read, and no slimmer RPC is known; if Codeium
+ * exposes a plan-status-only endpoint, switch to it.
+ */
+function devinBaseUrl(): string {
+  return (process.env.DEVIN_API_SERVER_URL ?? "https://server.codeium.com")
+    .replace(/\/+$/, "");
+}
+
+export async function fetchDevinQuotasWithToken(
+  accessToken: string | undefined,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  if (!accessToken) return failure("No Devin access token found", "config");
+  const result = await fetchJson(
+    `${devinBaseUrl()}/exa.api_server_pb.ApiServerService/GetUserStatus`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Connect-Protocol-Version": "1",
+      },
+      body: JSON.stringify({
+        metadata: {
+          ideName: "windsurf",
+          ideVersion: "3.6.27",
+          extensionName: "windsurf",
+          extensionVersion: "1.0.0",
+          apiKey: accessToken,
+          locale: "en",
+        },
+      }),
+    },
+    signal,
+  );
+  if (!result.ok) return failure(result.message, result.kind);
+  return success("devin", parseDevinUsage(result.data));
+}
+
+export async function fetchDevinQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  return fetchDevinQuotasWithToken(
+    (await providerAccessToken(authStorage, "devin")) ??
+      process.env.DEVIN_API_KEY,
+    signal,
+  );
+}
+
+/** Shared cancelled error shape, used by both the HTTP abort path and
+ * superseded cache waiters so the copy cannot drift between them. */
+export function cancelledError(): { message: string; kind: "cancelled" } {
+  return { message: "Request cancelled", kind: "cancelled" };
+}
+
 export const PROVIDER_FETCHERS = {
   anthropic: fetchAnthropicQuotas,
   "openai-codex": fetchCodexQuotas,
@@ -708,4 +771,5 @@ export const PROVIDER_FETCHERS = {
   "kimi-coding": fetchKimiCodingQuotas,
   grok: fetchGrokQuotas,
   antigravity: fetchAntigravityQuotas,
+  devin: fetchDevinQuotas,
 } as const;

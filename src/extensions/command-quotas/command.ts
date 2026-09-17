@@ -5,6 +5,7 @@ import {
   configLoader,
 } from "../../config.js";
 import { quotaAuthStorage } from "../../lib/auth.js";
+import { formatQuotaDisplay } from "../../utils/quotas-format.js";
 import {
   fetchAllProviderQuotas,
   fetchProviderQuotas,
@@ -18,11 +19,15 @@ type Snapshot = { provider: SupportedQuotaProvider; result: QuotasResult };
 
 async function openQuotaView(
   title: string,
-  loadSnapshots: (force: boolean, signal?: AbortSignal) => Promise<Snapshot[]>,
+  loadSnapshots: (
+    force: boolean,
+    signal?: AbortSignal,
+    onSnapshot?: (snapshot: Snapshot) => void,
+  ) => Promise<Snapshot[]>,
   ctx: ExtensionCommandContext,
 ): Promise<void> {
   const result = await ctx.ui.custom<null>((tui, theme, _kb, done) => {
-    const controller = new AbortController();
+    let controller = new AbortController();
     const component = new QuotasComponent(
       theme,
       tui,
@@ -32,6 +37,10 @@ async function openQuotaView(
         done(null);
       },
       () => {
+        // Abort any in-flight load so its late snapshots cannot paint over
+        // this refresh; a fresh controller serves the new load.
+        controller.abort();
+        controller = new AbortController();
         component.setState({ type: "loading" });
         tui.requestRender();
         void load(true);
@@ -39,8 +48,37 @@ async function openQuotaView(
     );
 
     async function load(force = false): Promise<void> {
-      const snapshots = await loadSnapshots(force, controller.signal);
-      if (controller.signal.aborted) return;
+      // Render incrementally: a slow provider (e.g. the catalog-class Devin
+      // GetUserStatus RPC) must not gate providers that already resolved.
+      // Capture this load's controller so a refresh aborts exactly the
+      // in-flight load, never its successor.
+      const loadController = controller;
+      const collected: Snapshot[] = [];
+      const onSnapshot = (snapshot: Snapshot): void => {
+        collected.push(snapshot);
+        if (loadController.signal.aborted) return;
+        // Maintain catalog order incrementally: each arrival is sorted into
+        // place, so rows never jump when a slow provider settles late.
+        collected.sort(
+          (a, b) =>
+            SUPPORTED_PROVIDERS.indexOf(a.provider) -
+            SUPPORTED_PROVIDERS.indexOf(b.provider),
+        );
+        component.setState({
+          type: "streaming",
+          snapshots: [...collected],
+          pending: Math.max(
+            0,
+            SUPPORTED_PROVIDERS.length - collected.length,
+          ),
+        });
+        tui.requestRender();
+      };
+      const snapshots = await loadSnapshots(force, loadController.signal, onSnapshot);
+      if (loadController.signal.aborted) return;
+      // The loader's return value is authoritative: canonical order, the
+      // only source for loaders that do not stream, and the transition to
+      // "loaded" so the state type always means complete.
       component.setState({ type: "loaded", snapshots });
       tui.requestRender();
     }
@@ -59,7 +97,9 @@ async function openQuotaView(
   });
 
   if (result === undefined) {
-    const snapshots = await loadSnapshots(true);
+    // Same as the interactive initial load: serve fresh-enough cache
+    // instead of force-refetching (and re-downloading) every provider.
+    const snapshots = await loadSnapshots(false);
     ctx.ui.notify(formatSnapshotsForNotify(snapshots), "info");
   }
 }
@@ -79,7 +119,7 @@ function formatSnapshotsForNotify(snapshots: Snapshot[]): string {
       continue;
     }
     const summary = result.data.windows
-      .map((w) => `${w.label} ${w.usedPercent}%`)
+      .map((w) => `${w.label} ${formatQuotaDisplay(w)}`)
       .join(", ");
     lines.push(`${provider}: ${summary || "no windows"}`);
   }
@@ -96,7 +136,12 @@ export function registerQuotasCommands(pi: ExtensionAPI): void {
       }
       await openQuotaView(
         "Provider Quotas",
-        (force, signal) => fetchAllProviderQuotas(quotaAuthStorage(ctx.modelRegistry), { force, signal }),
+        (force, signal, onSnapshot) =>
+          fetchAllProviderQuotas(quotaAuthStorage(ctx.modelRegistry), {
+            force,
+            signal,
+            onSnapshot,
+          }),
         ctx,
       );
     },

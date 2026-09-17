@@ -61,6 +61,7 @@ describe("QuotasComponent", () => {
                   windowSeconds: 31 * 24 * 3600,
                   usedValue: 249,
                   limitValue: 300,
+                  kind: "counts",
                   showPace: true,
                   nextLabel: "Resets",
                   nextAmount: "overage allowed",
@@ -101,9 +102,9 @@ describe("QuotasComponent", () => {
                   usedPercent: 0,
                   resetsAt: new Date("2026-05-14T16:40:29Z"),
                   windowSeconds: 7 * 24 * 3600,
+                  kind: "currency",
                   usedValue: 0,
                   limitValue: 24,
-                  isCurrency: true,
                   showPace: true,
                   nextLabel: "Next regen",
                   nextAmount: "+$0.48",
@@ -117,10 +118,53 @@ describe("QuotasComponent", () => {
 
     const output = component.render(70).join("\n");
 
-    expect(output).toContain("$0.00 / $24.00");
+    expect(output).toContain("$0.00/$24.00");
     expect(output).not.toContain("|");
 
     vi.useRealTimers();
+  });
+
+  it("renders devin credits as real counts and devin daily as percent via the shared predicate", () => {
+    const component = makeComponent();
+    component.setState({
+      type: "loaded",
+      snapshots: [
+        {
+          provider: "devin",
+          result: {
+            success: true,
+            data: {
+              provider: "devin",
+              windows: [
+                {
+                  provider: "devin",
+                  label: "Daily",
+                  usedPercent: 0,
+                  resetsAt: new Date("2026-09-17T08:00:00Z"),
+                  windowSeconds: 24 * 60 * 60,
+                  kind: "percent",
+                  nextLabel: "Resets",
+                },
+                {
+                  provider: "devin",
+                  label: "Credits / month",
+                  usedPercent: 60,
+                  resetsAt: null,
+                  windowSeconds: 0,
+                  usedValue: 60,
+                  limitValue: 100,
+                  kind: "counts",
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+
+    const rendered = component.render(70).join("\n");
+    expect(rendered).toContain("100% left");
+    expect(rendered).toContain("40/100 left");
   });
 
   it("renders a not_applicable provider silently with a dim note, not a warning", () => {

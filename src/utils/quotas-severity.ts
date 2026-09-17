@@ -39,6 +39,8 @@ export function safePercent(used: number, limit: number): number {
 export function getPacePercent(window: QuotaWindow): number | null {
   const totalMs = window.windowSeconds * 1000;
   if (totalMs <= 0) return null;
+  // Balance-style windows have no reset to pace against
+  if (window.resetsAt == null) return null;
   const remainingMs = window.resetsAt.getTime() - Date.now();
   const elapsedMs = totalMs - remainingMs;
   return Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
@@ -156,6 +158,12 @@ export function formatTimeRemaining(date: Date): string {
   if (hours >= 1) return mins > 0 ? `${hours}h${mins}m` : `${hours}h`;
   const totalSecs = Math.ceil(ms / 1000);
   return totalMins >= 1 ? `${totalMins}m` : `${totalSecs}s`;
+}
+
+/** Reset timing phrase that never produces the awkward "in now". */
+export function formatResetTiming(date: Date): string {
+  const remaining = formatTimeRemaining(date);
+  return remaining === "now" ? "now" : `in ${remaining}`;
 }
 
 export function getSeverityColor(

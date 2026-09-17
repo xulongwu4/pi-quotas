@@ -5,6 +5,7 @@ import {
   fetchAntigravityQuotas,
   fetchAntigravityQuotasWithToken,
   fetchCodexQuotasWithToken,
+  fetchDevinQuotasWithToken,
   fetchGitHubCopilotQuotas,
   fetchGitHubCopilotQuotasWithToken,
   fetchGrokQuotas,
@@ -208,6 +209,78 @@ describe("fetchGitHubCopilotQuotasWithToken", () => {
         headers: expect.objectContaining({ Authorization: "Bearer ghu-refresh-token" }),
       }),
     );
+  });
+});
+
+describe("fetchDevinQuotasWithToken", () => {
+  it("returns config error when token missing", async () => {
+    const result = await fetchDevinQuotasWithToken(undefined);
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "config" },
+    });
+  });
+
+  it("posts Connect metadata and parses planStatus windows", async () => {
+    let requestUrl = "";
+    let requestBody = "";
+    globalThis.fetch = vi.fn(async (input: any, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestBody = String(init?.body);
+      return new Response(
+        JSON.stringify({
+          userStatus: {
+            planStatus: {
+              dailyQuotaRemainingPercent: 100,
+              dailyQuotaResetAtUnix: "1789632000",
+              weeklyQuotaRemainingPercent: 75,
+              weeklyQuotaResetAtUnix: "1789891200",
+              availableFlexCredits: 40,
+              planInfo: { planName: "Free", monthlyPromptCredits: 100 },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as any;
+
+    const result = await fetchDevinQuotasWithToken("devin-session-token$abc");
+    expect(requestUrl).toContain("server.codeium.com");
+    expect(requestUrl).toContain("GetUserStatus");
+    expect(requestBody).toContain("metadata");
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("devin");
+      expect(result.data.windows).toHaveLength(3);
+    }
+  });
+
+  it("honors the DEVIN_API_SERVER_URL endpoint override", async () => {
+    process.env.DEVIN_API_SERVER_URL = "https://proxy.example";
+    let requestUrl = "";
+    globalThis.fetch = vi.fn(async (input: any) => {
+      requestUrl = String(input);
+      return new Response(
+        JSON.stringify({ userStatus: { planStatus: {} } }),
+        { status: 200 },
+      );
+    }) as any;
+
+    try {
+      const result = await fetchDevinQuotasWithToken("token");
+      expect(requestUrl).toContain("proxy.example/exa.api_server_pb");
+      expect(result.success).toBe(true);
+    } finally {
+      delete process.env.DEVIN_API_SERVER_URL;
+    }
+  });
+
+  it("propagates http failures", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response("nope", { status: 401 })) as any;
+    const result = await fetchDevinQuotasWithToken("token");
+    expect(result).toMatchObject({ success: false, error: { kind: "http" } });
   });
 });
 

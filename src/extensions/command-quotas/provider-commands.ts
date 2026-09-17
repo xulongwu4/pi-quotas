@@ -70,5 +70,11 @@ export function getProviderCommandInfo(
         commandName: "antigravity:quotas",
         title: "Antigravity Quotas",
       };
+    case "devin":
+      return {
+        provider,
+        commandName: "devin:quotas",
+        title: "Devin Quotas",
+      };
   }
 }

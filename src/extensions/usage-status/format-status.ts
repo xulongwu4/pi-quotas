@@ -1,16 +1,31 @@
+import type { QuotaWindow } from "../../types/quotas.js";
+import {
+  formatQuotaDisplay,
+  remainingPercent,
+} from "../../utils/quotas-format.js";
 import type { RiskSeverity } from "../../utils/quotas-severity.js";
 import { getSeverityColor } from "../../utils/quotas-severity.js";
 
-export type WindowStatus = {
-  label: string;
-  usedPercent: number;
-  severity: RiskSeverity;
-  resetsAt: string | null;
-  limited: boolean;
-  isCurrency?: boolean;
-  usedValue?: number;
-  limitValue?: number;
-};
+// Mirror QuotaWindow's kind/value fields via Pick so a new kind field
+// on QuotaWindow automatically flows here (toWindowStatus fails to
+// compile until it copies the field).
+type WindowStatusFor<W extends QuotaWindow> = W extends QuotaWindow
+  ? Pick<
+      W,
+      | "provider"
+      | "label"
+      | "usedPercent"
+      | "limited"
+      | "kind"
+      | "usedValue"
+      | "limitValue"
+    > & {
+      severity: RiskSeverity;
+      resetsAt: Date | null;
+    }
+  : never;
+
+export type WindowStatus = WindowStatusFor<QuotaWindow>;
 
 export interface ThemeLike {
   fg(color: string, text: string): string;
@@ -28,6 +43,7 @@ const SHORT_LABELS: Record<string, string> = {
   "Completions / month": "comp",
   "Spend cap": "cap",
   "Credits": "credits",
+  "Credits / month": "credits",
   "Extra (AUD)": "extra",
   "Extra (USD)": "extra",
   "Extra (EUR)": "extra",
@@ -55,17 +71,6 @@ const SHORT_LABELS: Record<string, string> = {
 };
 
 /**
- * Returns true when a window has a real used/limit pair
- * (e.g. 293/300 premium requests) rather than just a percentage.
- */
-function hasRealCounts(w: WindowStatus): boolean {
-  if (w.limitValue == null || w.usedValue == null) return false;
-  // Percentage-only windows store limitValue=100 and usedValue=usedPercent
-  if (w.limitValue === 100 && Math.abs(w.usedValue - w.usedPercent) < 0.01) return false;
-  return w.limitValue > 0;
-}
-
-/**
  * Format a single window for the footer status bar.
  *
  * - Colors both the label and value based on severity
@@ -84,32 +89,17 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
   const labelText = theme.fg(labelColor, `${short}:`);
 
   // Synthetic windows always use compact "remaining%" format
-  // to match the pi-synthetic extension display
-  const SYNTHETIC_LABELS = new Set([
-    "Credits / week", "Requests / 5h", "Search / hour", "Free Tool Calls / day",
-  ]);
-  const isSynthetic = SYNTHETIC_LABELS.has(w.label);
+  // to match the pi-synthetic extension display.
+  const isSynthetic = w.provider === "synthetic";
 
   let valueText: string;
   if (isSynthetic) {
     // Compact format matching pi-synthetic: just remaining%
-    const remaining = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
-    valueText = theme.fg(color, `${remaining}%`);
-  } else if (w.label === "Spend cap") {
-    valueText = theme.fg(color, w.limited ? "REACHED" : "OK");
-  } else if (w.isCurrency && w.usedValue != null && w.limitValue != null) {
-    // Tracking-only windows have limitValue=0, show just usage
-    if (w.limitValue === 0) {
-      valueText = theme.fg(color, `$${w.usedValue.toFixed(2)} used`);
-    } else {
-      valueText = theme.fg(color, `$${w.usedValue.toFixed(2)}/$${w.limitValue.toFixed(2)}`);
-    }
-  } else if (hasRealCounts(w)) {
-    const remaining = Math.max(0, Math.round(w.limitValue! - w.usedValue!));
-    valueText = theme.fg(color, `${remaining}/${w.limitValue}`);
+    valueText = theme.fg(color, `${remainingPercent(w)}%`);
   } else {
-    const remaining = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
-    valueText = theme.fg(color, `${remaining}% left`);
+    // Shared value + suffix (types/quotas) keeps footer, dashboard, and
+    // notify fallback in agreement.
+    valueText = theme.fg(color, formatQuotaDisplay(w));
   }
 
   const limitTag = w.limited ? theme.fg("error", " !") : "";

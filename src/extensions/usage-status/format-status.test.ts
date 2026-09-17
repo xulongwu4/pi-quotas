@@ -19,28 +19,77 @@ describe("formatWindowStatus", () => {
 
   it("shows remaining/limit for windows with known limits (GitHub premium)", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "Premium / month",
       usedPercent: 2.3,
       severity: "none",
-      resetsAt: "2026-05-01T00:00:00Z",
+      resetsAt: new Date("2026-05-01T00:00:00Z"),
       limited: false,
       usedValue: 7,
       limitValue: 300,
+      kind: "counts",
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("293/300");
     expect(result).toContain("[success]");
   });
 
+  it("kind=counts renders real counts even when limitValue is 100 (Devin credits)", () => {
+    const w: WindowStatus = {
+      provider: "anthropic",
+      label: "Credits / month",
+      usedPercent: 60,
+      severity: "warning",
+      resetsAt: null,
+      limited: false,
+      usedValue: 60,
+      limitValue: 100,
+      kind: "counts",
+    };
+    const result = formatWindowStatus(theme, w);
+    expect(result).toContain("40/100");
+    expect(result).not.toContain("% left");
+  });
+
+  it("kind=percent renders a remaining percentage", () => {
+    const w: WindowStatus = {
+      provider: "anthropic",
+      label: "Daily",
+      usedPercent: 25,
+      severity: "none",
+      resetsAt: new Date("2026-09-20T08:00:00Z"),
+      limited: false,
+      kind: "percent",
+    };
+    const result = formatWindowStatus(theme, w);
+    expect(result).toContain("75% left");
+    expect(result).not.toContain("/100");
+  });
+
+  it("passes kind through toWindowStatus", () => {
+    const status = toWindowStatus({
+      provider: "devin",
+      label: "Credits / month",
+      usedPercent: 60,
+      resetsAt: null,
+      windowSeconds: 0,
+      usedValue: 60,
+      limitValue: 100,
+      kind: "counts",
+    });
+    expect(status.kind).toBe("counts");
+    expect(status.resetsAt).toBeNull();
+  });
+
   it("shows remaining % for percentage-only windows (Anthropic 5h)", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "5h",
       usedPercent: 9,
       severity: "none",
-      resetsAt: "2026-04-22T18:00:00Z",
+      resetsAt: new Date("2026-04-22T18:00:00Z"),
       limited: false,
-      usedValue: 9,
-      limitValue: 100,
+      kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("91% left");
@@ -49,13 +98,13 @@ describe("formatWindowStatus", () => {
 
   it("formats Grok subscription window using sub short label", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "Subscription",
       usedPercent: 40,
       severity: "none",
-      resetsAt: "2026-06-01T00:00:00Z",
+      resetsAt: new Date("2026-06-01T00:00:00Z"),
       limited: false,
-      usedValue: 40,
-      limitValue: 100,
+      kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("sub:");
@@ -64,35 +113,36 @@ describe("formatWindowStatus", () => {
 
   it("formats Antigravity windows with custom short labels", () => {
     const w1: WindowStatus = {
+      provider: "anthropic",
       label: "Gemini 5h",
       usedPercent: 20,
       severity: "none",
-      resetsAt: "2026-06-15T11:39:34Z",
+      resetsAt: new Date("2026-06-15T11:39:34Z"),
       limited: false,
-      usedValue: 20,
-      limitValue: 100,
+      kind: "percent",
     };
     const w2: WindowStatus = {
+      provider: "anthropic",
       label: "Claude/GPT 7d",
       usedPercent: 35,
       severity: "none",
-      resetsAt: "2026-06-20T00:39:54Z",
+      resetsAt: new Date("2026-06-20T00:39:54Z"),
       limited: false,
-      usedValue: 35,
-      limitValue: 100,
+      kind: "percent",
     };
     expect(formatWindowStatus(theme, w1)).toContain("gem-5h:");
     expect(formatWindowStatus(theme, w2)).toContain("3p-7d:");
   });
 
-  it("shows currency for isCurrency windows (Anthropic extra)", () => {
+  it("shows currency for currency windows (Anthropic extra)", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "Extra (AUD)",
       usedPercent: 71.8,
       severity: "warning",
-      resetsAt: "2026-05-01T00:00:00Z",
+      resetsAt: new Date("2026-05-01T00:00:00Z"),
       limited: false,
-      isCurrency: true,
+      kind: "currency",
       usedValue: 215,
       limitValue: 300,
     };
@@ -103,13 +153,13 @@ describe("formatWindowStatus", () => {
 
   it("shows REACHED for spend cap", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "Spend cap",
       usedPercent: 100,
       severity: "critical",
       resetsAt: null,
+      kind: "spend-cap",
       limited: true,
-      usedValue: 1,
-      limitValue: 1,
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("REACHED");
@@ -118,13 +168,13 @@ describe("formatWindowStatus", () => {
 
   it("colors label when severity is warning or worse", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "7d",
       usedPercent: 85,
       severity: "high",
-      resetsAt: "2026-04-23T23:00:00Z",
+      resetsAt: new Date("2026-04-23T23:00:00Z"),
       limited: false,
-      usedValue: 85,
-      limitValue: 100,
+      kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
     // label should be colored with error (high maps to error)
@@ -134,13 +184,13 @@ describe("formatWindowStatus", () => {
 
   it("keeps label dim when severity is none", () => {
     const w: WindowStatus = {
+      provider: "anthropic",
       label: "5h",
       usedPercent: 10,
       severity: "none",
-      resetsAt: "2026-04-22T18:00:00Z",
+      resetsAt: new Date("2026-04-22T18:00:00Z"),
       limited: false,
-      usedValue: 10,
-      limitValue: 100,
+      kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("[dim]5h:");
@@ -165,8 +215,7 @@ describe("formatWindowStatus", () => {
         usedPercent: 50,
         resetsAt: new Date("2026-05-06T07:47:37Z"),
         windowSeconds: 5 * 60 * 60,
-        usedValue: 50,
-        limitValue: 100,
+        kind: "percent",
       });
 
       const result = formatStatus({ ui: { theme } } as any, [status]);
@@ -181,13 +230,13 @@ describe("formatWindowStatus", () => {
       { ui: { theme } } as any,
       [
         {
+          provider: "openai-codex",
           label: "Spend cap",
           usedPercent: 0,
           severity: "none",
           resetsAt: null,
           limited: false,
-          usedValue: 0,
-          limitValue: 1,
+          kind: "spend-cap",
         },
       ],
     );
@@ -195,30 +244,6 @@ describe("formatWindowStatus", () => {
     expect(result).toContain("cap:");
     expect(result).not.toContain("↺");
     expect(result).not.toContain("soon");
-  });
-
-  it("maps sentinel reset dates to null before rendering status for non-reset provider windows", () => {
-    const windows: Array<{ provider: SupportedQuotaProvider; label: string; isCurrency?: boolean }> = [
-      { provider: "openai-codex", label: "Spend cap" },
-      { provider: "openai-codex", label: "Credits", isCurrency: true },
-      { provider: "openrouter", label: "Credits Remaining", isCurrency: true },
-    ];
-
-    for (const { provider, label, isCurrency } of windows) {
-      const status = toWindowStatus({
-        provider,
-        label,
-        usedPercent: 0,
-        resetsAt: new Date(0),
-        windowSeconds: 0,
-        usedValue: 0,
-        limitValue: 1,
-        limited: false,
-        isCurrency,
-      });
-
-      expect(status.resetsAt).toBeNull();
-    }
   });
 
   it("clears the footer status when filtering removes all windows", () => {
@@ -233,8 +258,7 @@ describe("formatWindowStatus", () => {
         usedPercent: 10,
         resetsAt: new Date("2026-05-06T07:47:37Z"),
         windowSeconds: 5 * 60 * 60,
-        usedValue: 10,
-        limitValue: 100,
+        kind: "percent",
       },
       {
         provider: "anthropic",
@@ -242,8 +266,7 @@ describe("formatWindowStatus", () => {
         usedPercent: 20,
         resetsAt: new Date("2026-05-06T07:47:37Z"),
         windowSeconds: 7 * 24 * 60 * 60,
-        usedValue: 20,
-        limitValue: 100,
+        kind: "percent",
       },
       {
         provider: "anthropic",
@@ -253,7 +276,7 @@ describe("formatWindowStatus", () => {
         windowSeconds: 30 * 24 * 60 * 60,
         usedValue: 30,
         limitValue: 100,
-        isCurrency: true,
+        kind: "currency",
       },
     ]);
 
@@ -271,13 +294,13 @@ describe("formatWindowStatus", () => {
       { ui: { theme } } as any,
       [
         {
+          provider: "anthropic",
           label: "5h",
           usedPercent: 100,
           severity: "critical",
-          resetsAt: "2026-05-06T05:28:37Z",
+          resetsAt: new Date("2026-05-06T05:28:37Z"),
           limited: false,
-          usedValue: 100,
-          limitValue: 100,
+          kind: "percent",
         },
       ],
     );

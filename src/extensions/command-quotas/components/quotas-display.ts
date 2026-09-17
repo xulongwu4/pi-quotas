@@ -4,10 +4,11 @@ import type { Component } from "@mariozechner/pi-tui";
 import { Loader, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 import pkg from "../../../../package.json" with { type: "json" };
 import { PROVIDER_LABELS } from "../../../lib/quotas.js";
+import { formatQuotaDisplay } from "../../../utils/quotas-format.js";
 import type { QuotasResult, SupportedQuotaProvider } from "../../../types/quotas.js";
 import {
   assessWindow,
-  formatTimeRemaining,
+  formatResetTiming,
   getSeverityColor,
 } from "../../../utils/quotas-severity.js";
 
@@ -18,6 +19,7 @@ type Snapshot = {
 
 type QuotasState =
   | { type: "loading" }
+  | { type: "streaming"; snapshots: Snapshot[]; pending: number }
   | { type: "loaded"; snapshots: Snapshot[] };
 
 function renderProgressBar(
@@ -115,7 +117,13 @@ export class QuotasComponent implements Component {
     if (this.state.type === "loading") {
       lines.push(...(this.loader ? this.loader.render(width) : [this.theme.fg("muted", "  Fetching quotas...")]));
     } else {
-      lines.push(...this.renderLoaded(this.state.snapshots, width));
+      lines.push(
+        ...this.renderLoaded(
+          this.state.snapshots,
+          this.state.type === "streaming" ? this.state.pending : 0,
+          width,
+        ),
+      );
     }
 
     lines.push("");
@@ -124,11 +132,25 @@ export class QuotasComponent implements Component {
     return lines;
   }
 
-  private renderLoaded(snapshots: Snapshot[], maxWidth: number): string[] {
+  private renderLoaded(
+    snapshots: Snapshot[],
+    pending: number,
+    maxWidth: number,
+  ): string[] {
     const lines: string[] = [""];
     for (const snapshot of snapshots) {
       lines.push(...this.renderProvider(snapshot, maxWidth));
       lines.push("");
+    }
+    // Incomplete combined views keep an explicit "still loading" note so a
+    // slow provider (e.g. Devin GetUserStatus) is not mistaken for done.
+    if (pending > 0) {
+      lines.push(
+        truncateToWidth(
+          `  ${this.theme.fg("dim", `${pending} provider${pending > 1 ? "s" : ""} still loading…`)}`,
+          maxWidth,
+        ),
+      );
     }
     if (lines.at(-1) === "") lines.pop();
     return lines;
@@ -162,25 +184,9 @@ export class QuotasComponent implements Component {
       const assessment = assessWindow(window);
       const color = getSeverityColor(assessment.severity);
 
-      // Format the usage string depending on window type
-      let usedStr: string;
-      if (window.isCurrency) {
-        // Tracking-only windows have limitValue=0, show just usage
-        if (window.limitValue === 0) {
-          usedStr = `$${window.usedValue.toFixed(2)} used`;
-        } else {
-          usedStr = `$${window.usedValue.toFixed(2)} / $${window.limitValue.toFixed(2)}`;
-        }
-      } else if (window.limitValue <= 1 && window.label === "Spend cap") {
-        usedStr = window.limited ? "REACHED" : "OK";
-      } else if (window.limitValue > 0 && window.limitValue !== 100) {
-        // Real counts: show remaining/total (e.g. "293/300")
-        const remaining = Math.max(0, Math.round(window.limitValue - window.usedValue));
-        usedStr = `${remaining}/${window.limitValue} left`;
-      } else {
-        const remaining = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
-        usedStr = `${remaining}% left`;
-      }
+      // Shared value + suffix (types/quotas) keeps dashboard, footer,
+      // and notify fallback in agreement.
+      const usedStr = formatQuotaDisplay(window);
 
       const bar = renderProgressBar(window.usedPercent, barWidth, this.theme, color, assessment.pacePercent);
       const limitedBadge = window.limited ? this.theme.fg("error", " LIMITED") : "";
@@ -192,8 +198,8 @@ export class QuotasComponent implements Component {
 
       // Subtitle: next event info + overage
       const subtitleParts: string[] = [];
-      if (window.resetsAt.getTime() > 0) {
-        subtitleParts.push(`${window.nextLabel ?? "Resets"} in ${formatTimeRemaining(window.resetsAt)}`);
+      if (window.resetsAt != null) {
+        subtitleParts.push(`${window.nextLabel ?? "Resets"} ${formatResetTiming(window.resetsAt)}`);
       } else if (window.nextLabel) {
         subtitleParts.push(window.nextLabel);
       }

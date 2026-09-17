@@ -1,13 +1,34 @@
 import type { QuotaWindow } from "../types/quotas.js";
 import { safePercent } from "../utils/quotas-severity.js";
 
-function parseDateish(value: unknown): Date {
+/** Parse a reset timestamp; null means "no reset / unknown". Never
+ * returns an Invalid Date: overflow/Infinity timestamps map to null so
+ * the resetsAt != null checks downstream mean "a real reset exists". */
+function parseDateish(value: unknown): Date | null {
   if (typeof value === "number") {
+    if (!(value > 0)) return null;
     const ms = value > 10 ** 11 ? value : value * 1000;
-    return new Date(ms);
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
-  if (typeof value === "string") return new Date(value);
-  return new Date(0);
+  if (typeof value === "string") {
+    // Numeric unix-second/ms strings (e.g. "1789632000") are not ISO-8601;
+    // new Date("1789632000") is Invalid Date, so coerce to the number path.
+    if (/^\d+$/.test(value)) return parseDateish(Number(value));
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+}
+
+/** Percent-only window kind; spread into the push so the value is
+ * written once and no dummy usedValue/limitValue pair can leak into a
+ * percent window (a new surface formatting from raw counts would then
+ * mis-render true percents the same as true counts). */
+function percentOnly(
+  usedPercent: number,
+): Pick<Extract<QuotaWindow, { kind: "percent" }>, "usedPercent" | "kind"> {
+  return { usedPercent, kind: "percent" };
 }
 
 function monthWindowSeconds(resetAt: Date): number {
@@ -26,11 +47,9 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "anthropic",
       label: "5h",
-      usedPercent: Number(data.five_hour.utilization ?? 0),
       resetsAt: parseDateish(data.five_hour.resets_at),
       windowSeconds: 5 * 60 * 60,
-      usedValue: Number(data.five_hour.utilization ?? 0),
-      limitValue: 100,
+      ...percentOnly(Number(data.five_hour.utilization ?? 0)),
       showPace: false,
       nextLabel: "Resets",
     });
@@ -40,11 +59,9 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "anthropic",
       label: "7d",
-      usedPercent: Number(data.seven_day.utilization ?? 0),
       resetsAt: parseDateish(data.seven_day.resets_at),
       windowSeconds: 7 * 24 * 60 * 60,
-      usedValue: Number(data.seven_day.utilization ?? 0),
-      limitValue: 100,
+      ...percentOnly(Number(data.seven_day.utilization ?? 0)),
       showPace: false,
       nextLabel: "Resets",
     });
@@ -63,11 +80,9 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
       windows.push({
         provider: "anthropic",
         label,
-        usedPercent: Number(entry.utilization),
         resetsAt: parseDateish(entry.resets_at),
         windowSeconds: 7 * 24 * 60 * 60,
-        usedValue: Number(entry.utilization),
-        limitValue: 100,
+        ...percentOnly(Number(entry.utilization)),
         showPace: false,
         nextLabel: "Resets",
       });
@@ -87,11 +102,9 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "anthropic",
       label,
-      usedPercent: Number(entry.percent ?? 0),
       resetsAt: parseDateish(entry.resets_at),
       windowSeconds: 7 * 24 * 60 * 60,
-      usedValue: Number(entry.percent ?? 0),
-      limitValue: 100,
+      ...percentOnly(Number(entry.percent ?? 0)),
       showPace: false,
       nextLabel: "Resets",
     });
@@ -117,7 +130,7 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
       windowSeconds: 30 * 24 * 60 * 60,
       usedValue: usedDollars,
       limitValue: limitDollars,
-      isCurrency: true,
+      kind: "currency",
       showPace: true,
       paceScale: 1,
       nextLabel: "Resets",
@@ -173,11 +186,9 @@ export function parseCodexUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "openai-codex",
       label: codexWindowLabel(windowSeconds),
-      usedPercent: percentLeftToUsedPercent(primary),
       resetsAt: parseDateish(primary.reset_at ?? primary.reset_time_ms),
       windowSeconds,
-      usedValue: percentLeftToUsedPercent(primary),
-      limitValue: 100,
+      ...percentOnly(percentLeftToUsedPercent(primary)),
       showPace: false,
       nextLabel: "Resets",
     });
@@ -191,11 +202,9 @@ export function parseCodexUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "openai-codex",
       label: codexWindowLabel(windowSeconds),
-      usedPercent: percentLeftToUsedPercent(secondary),
       resetsAt: parseDateish(secondary.reset_at ?? secondary.reset_time_ms),
       windowSeconds,
-      usedValue: percentLeftToUsedPercent(secondary),
-      limitValue: 100,
+      ...percentOnly(percentLeftToUsedPercent(secondary)),
       showPace: false,
       nextLabel: "Resets",
     });
@@ -209,11 +218,11 @@ export function parseCodexUsage(data: any): QuotaWindow[] {
       provider: "openai-codex",
       label: "Credits",
       usedPercent: 0,
-      resetsAt: new Date(0),
+      resetsAt: null,
       windowSeconds: 0,
       usedValue: balance,
       limitValue: balance,
-      isCurrency: true,
+      kind: "currency",
       showPace: false,
       nextLabel: credits.approx_local_messages
         ? `~${credits.approx_local_messages} local msgs`
@@ -229,10 +238,9 @@ export function parseCodexUsage(data: any): QuotaWindow[] {
       provider: "openai-codex",
       label: "Spend cap",
       usedPercent: reached ? 100 : 0,
-      resetsAt: new Date(0),
+      resetsAt: null,
       windowSeconds: 0,
-      usedValue: reached ? 1 : 0,
-      limitValue: 1,
+      kind: "spend-cap",
       limited: reached,
       showPace: false,
       nextLabel: reached ? "Reached" : "OK",
@@ -250,7 +258,8 @@ export function parseGitHubCopilotUsage(data: any): QuotaWindow[] {
       data?.quota_reset_date_utc ??
       data?.limited_user_reset_date,
   );
-  const periodSeconds = monthWindowSeconds(resetAt);
+  const periodSeconds =
+    resetAt != null ? monthWindowSeconds(resetAt) : 30 * 24 * 60 * 60;
 
   const snapshots = data?.quota_snapshots;
   if (snapshots && typeof snapshots === "object") {
@@ -276,6 +285,7 @@ export function parseGitHubCopilotUsage(data: any): QuotaWindow[] {
         windowSeconds: periodSeconds,
         usedValue: entitlement - remaining,
         limitValue: entitlement,
+        kind: "counts",
         showPace: true,
         nextLabel: "Resets",
         nextAmount:
@@ -305,6 +315,7 @@ export function parseGitHubCopilotUsage(data: any): QuotaWindow[] {
         windowSeconds: periodSeconds,
         usedValue: limitValue - remaining,
         limitValue,
+        kind: "counts",
         showPace: true,
         nextLabel: "Resets",
       });
@@ -377,7 +388,7 @@ export function parseOpenRouterUsage(data: any): QuotaWindow[] {
       windowSeconds: 30 * 24 * 60 * 60,
       usedValue: usageMonthly,
       limitValue: limit,
-      isCurrency: true,
+      kind: "currency",
       showPace: true,
       paceScale: 1,
       nextLabel: "Resets",
@@ -388,11 +399,11 @@ export function parseOpenRouterUsage(data: any): QuotaWindow[] {
       provider: "openrouter",
       label: "Credits Remaining",
       usedPercent: 0,
-      resetsAt: new Date(0),
+      resetsAt: null,
       windowSeconds: 0,
       usedValue: limitRemaining,
       limitValue: limitRemaining,
-      isCurrency: true,
+      kind: "currency",
       showPace: false,
       nextLabel: undefined,
     });
@@ -407,7 +418,7 @@ export function parseOpenRouterUsage(data: any): QuotaWindow[] {
     windowSeconds: 24 * 60 * 60,
     usedValue: usageDaily,
     limitValue: 0,
-    isCurrency: true,
+    kind: "currency",
     showPace: false,
     nextLabel: "UTC",
   });
@@ -421,7 +432,7 @@ export function parseOpenRouterUsage(data: any): QuotaWindow[] {
     windowSeconds: 7 * 24 * 60 * 60,
     usedValue: usageWeekly,
     limitValue: 0,
-    isCurrency: true,
+    kind: "currency",
     showPace: false,
     nextLabel: "Week",
   });
@@ -435,7 +446,7 @@ export function parseOpenRouterUsage(data: any): QuotaWindow[] {
     windowSeconds: 30 * 24 * 60 * 60,
     usedValue: usageMonthly,
     limitValue: 0,
-    isCurrency: true,
+    kind: "currency",
     showPace: false,
     nextLabel: "Month",
   });
@@ -464,7 +475,7 @@ export function parseSyntheticUsage(data: any): QuotaWindow[] {
       windowSeconds: 24 * 60 * 60,
       usedValue: limitValue - remainingValue,
       limitValue,
-      isCurrency: true,
+      kind: "currency",
       showPace: true,
       paceScale: 1 / 7,
       nextAmount: `+${data.weeklyTokenLimit.nextRegenCredits}`,
@@ -484,6 +495,7 @@ export function parseSyntheticUsage(data: any): QuotaWindow[] {
       windowSeconds: 5 * 60 * 60,
       usedValue: Math.round(used),
       limitValue: data.rollingFiveHourLimit.max,
+      kind: "counts",
       showPace: false,
       limited: data.rollingFiveHourLimit.limited,
       nextLabel: data.rollingFiveHourLimit.limited ? "Limited" : "Resets",
@@ -503,6 +515,7 @@ export function parseSyntheticUsage(data: any): QuotaWindow[] {
       windowSeconds: 60 * 60,
       usedValue: data.search.hourly.requests,
       limitValue: data.search.hourly.limit,
+      kind: "counts",
       showPace: true,
       paceScale: 1,
       nextLabel: "Resets",
@@ -522,6 +535,7 @@ export function parseSyntheticUsage(data: any): QuotaWindow[] {
       windowSeconds: 24 * 60 * 60,
       usedValue: data.freeToolCalls.requests,
       limitValue: data.freeToolCalls.limit,
+      kind: "counts",
       showPace: true,
       paceScale: 1,
       nextLabel: "Resets",
@@ -548,11 +562,9 @@ export function parseOpenCodeGoUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "opencode-go",
       label: "5h Rolling",
-      usedPercent,
       resetsAt,
       windowSeconds: 5 * 60 * 60,
-      usedValue: usedPercent,
-      limitValue: 100,
+      ...percentOnly(usedPercent),
       showPace: false,
       nextLabel: "Resets",
     });
@@ -569,11 +581,9 @@ export function parseOpenCodeGoUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "opencode-go",
       label: "Weekly",
-      usedPercent,
       resetsAt,
       windowSeconds: 7 * 24 * 60 * 60,
-      usedValue: usedPercent,
-      limitValue: 100,
+      ...percentOnly(usedPercent),
       showPace: true,
       paceScale: 1,
       nextLabel: "Resets",
@@ -591,11 +601,9 @@ export function parseOpenCodeGoUsage(data: any): QuotaWindow[] {
     windows.push({
       provider: "opencode-go",
       label: "Monthly",
-      usedPercent,
       resetsAt,
       windowSeconds: 30 * 24 * 60 * 60,
-      usedValue: usedPercent,
-      limitValue: 100,
+      ...percentOnly(usedPercent),
       showPace: true,
       paceScale: 1,
       nextLabel: "Resets",
@@ -623,6 +631,7 @@ export function parseKimiCodingUsage(data: any): QuotaWindow[] {
         windowSeconds: 7 * 24 * 60 * 60,
         usedValue: used,
         limitValue: limit,
+        kind: "counts",
         showPace: true,
         limited: used >= limit,
         nextLabel: "Resets",
@@ -680,6 +689,7 @@ export function parseKimiCodingUsage(data: any): QuotaWindow[] {
       windowSeconds,
       usedValue: used,
       limitValue: limit,
+      kind: "counts",
       showPace: false,
       limited: used >= limit,
       nextLabel: "Resets",
@@ -742,11 +752,9 @@ export function parseZaiUsage(data: any): QuotaWindow[] {
       collected.push({
         provider: "zai",
         label,
-        usedPercent: Number(entry.percentage ?? 0),
         resetsAt: parseDateish(entry.nextResetTime),
         windowSeconds,
-        usedValue: Number(entry.percentage ?? 0),
-        limitValue: 100,
+        ...percentOnly(Number(entry.percentage ?? 0)),
         showPace: false,
         nextLabel: "Resets",
       });
@@ -768,6 +776,7 @@ export function parseZaiUsage(data: any): QuotaWindow[] {
         windowSeconds: 30 * 24 * 60 * 60,
         usedValue: used,
         limitValue: limit,
+        kind: "counts",
         showPace: false,
         nextLabel: "Resets",
       });
@@ -809,25 +818,30 @@ export function parseGrokUsage(data: any): QuotaWindow[] {
     usedPercent = Math.max(0, Math.min(100, rawPercent));
   } else if (cap > 0 && Number.isFinite(used)) {
     usedPercent = safePercent(used, cap);
-  } else if (resetsAt.getTime() > 0) {
+  } else if (resetsAt != null) {
     usedPercent = 0;
   }
 
   if (usedPercent == null) return windows;
 
   const windowSeconds =
-    resetsAt.getTime() > 0
-      ? monthWindowSeconds(resetsAt)
-      : 30 * 24 * 60 * 60;
+    resetsAt != null ? monthWindowSeconds(resetsAt) : 30 * 24 * 60 * 60;
+  const value =
+    cap > 0 && Number.isFinite(used)
+      ? ({
+        kind: "counts",
+        usedPercent,
+        usedValue: used,
+        limitValue: cap,
+      } as const)
+      : percentOnly(usedPercent);
 
   windows.push({
     provider: "grok",
     label: "Subscription",
-    usedPercent,
     resetsAt,
     windowSeconds,
-    usedValue: cap > 0 && Number.isFinite(used) ? used : usedPercent,
-    limitValue: cap > 0 ? cap : 100,
+    ...value,
     showPace: true,
     nextLabel: "Resets",
   });
@@ -880,11 +894,9 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
         windows.push({
           provider: "antigravity",
           label: `${prefix} ${cadence}`,
-          usedPercent,
           resetsAt: parseDateish(bucket.resetTime),
           windowSeconds,
-          usedValue: usedPercent,
-          limitValue: 100,
+          ...percentOnly(usedPercent),
           showPace: isWeekly,
           nextLabel: "Resets",
         });
@@ -913,11 +925,9 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
       windows.push({
         provider: "antigravity",
         label,
-        usedPercent,
         resetsAt: parseDateish(config?.quotaInfo?.resetTime),
         windowSeconds: 5 * 60 * 60,
-        usedValue: usedPercent,
-        limitValue: 100,
+        ...percentOnly(usedPercent),
         showPace: false,
         nextLabel: "Resets",
       });
@@ -970,16 +980,15 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
     // from how far out the reset is. Use retrieveUserQuotaSummary for exact buckets.
     const pushPool = (prefix: string, fraction: number, resetTime: string | undefined) => {
       const resetsAt = parseDateish(resetTime);
-      const isWeekly = resetsAt.getTime() - Date.now() > 5 * 60 * 60 * 1000;
+      const isWeekly =
+        resetsAt != null && resetsAt.getTime() - Date.now() > 5 * 60 * 60 * 1000;
       const usedPercent = Math.max(0, Math.min(100, Math.round((1 - fraction) * 100)));
       windows.push({
         provider: "antigravity",
         label: `${prefix} ${isWeekly ? "7d" : "5h"}`,
-        usedPercent,
         resetsAt,
         windowSeconds: isWeekly ? 7 * 24 * 60 * 60 : 5 * 60 * 60,
-        usedValue: usedPercent,
-        limitValue: 100,
+        ...percentOnly(usedPercent),
         showPace: isWeekly,
         nextLabel: "Resets",
       });
@@ -989,5 +998,84 @@ export function parseAntigravityUsage(data: any): QuotaWindow[] {
   }
 
   windows.sort((a, b) => a.windowSeconds - b.windowSeconds);
+  return windows;
+}
+
+// Devin (Cognition) quotas from the Connect GetUserStatus endpoint on
+// server.codeium.com (the same Windsurf backend pi-devin streams through).
+// planStatus exposes "remaining percent" values, so they are inverted here.
+// Reset times are Unix seconds (sometimes as strings).
+export function parseDevinUsage(data: any): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  const status = data?.userStatus ?? data;
+  const plan = status?.planStatus;
+
+  const pushPercentWindow = (
+    label: string,
+    remainingPercentValue: unknown,
+    resetAt: unknown,
+    windowSeconds: number,
+  ): void => {
+    // Number(null) is 0, so a JSON null must be skipped explicitly or the
+    // window would render as fully used.
+    if (remainingPercentValue == null) return;
+    const remainingPercent = Number(remainingPercentValue);
+    if (!Number.isFinite(remainingPercent)) return;
+    // The kind is declared at the producer; remaining outside 0..100
+    // must not leak an unclamped percent next to the bar.
+    const usedPercent = Math.max(0, Math.min(100, 100 - remainingPercent));
+    windows.push({
+      provider: "devin",
+      label,
+      resetsAt: parseDateish(resetAt),
+      windowSeconds,
+      ...percentOnly(usedPercent),
+      showPace: false,
+      nextLabel: "Resets",
+    });
+  };
+
+  pushPercentWindow(
+    "Daily",
+    plan?.dailyQuotaRemainingPercent,
+    plan?.dailyQuotaResetAtUnix,
+    24 * 60 * 60,
+  );
+  pushPercentWindow(
+    "Weekly",
+    plan?.weeklyQuotaRemainingPercent,
+    plan?.weeklyQuotaResetAtUnix,
+    7 * 24 * 60 * 60,
+  );
+
+  const monthlyCredits = Number(plan?.planInfo?.monthlyPromptCredits ?? 0);
+  const availableCreditsValue =
+    plan?.availablePromptCredits ?? plan?.availableFlexCredits;
+  // Number(null) is 0: an explicit JSON null must skip the window rather
+  // than render the credits as fully used.
+  const availableCredits = Number(availableCreditsValue);
+  if (
+    monthlyCredits > 0 &&
+    availableCreditsValue != null &&
+    Number.isFinite(availableCredits)
+  ) {
+    // No billing reset exists in GetUserStatus, so this is a balance-style
+    // window (windowSeconds 0, null reset) like Codex/OpenRouter credits.
+    // kind:"counts" keeps this on the real-counts path even when
+    // monthlyPromptCredits is exactly 100.
+    const usedCredits = Math.max(0, monthlyCredits - availableCredits);
+    windows.push({
+      provider: "devin",
+      label: "Credits / month",
+      usedPercent: safePercent(usedCredits, monthlyCredits),
+      resetsAt: null,
+      windowSeconds: 0,
+      usedValue: usedCredits,
+      limitValue: monthlyCredits,
+      kind: "counts",
+      showPace: false,
+    });
+  }
+
   return windows;
 }

@@ -1,6 +1,7 @@
 import { assert, describe, expect, it } from "vitest";
 import {
   assessWindow,
+  formatResetTiming,
   getPacePercent,
   getProjectedPercent,
   getSeverityColor,
@@ -19,10 +20,9 @@ function makeWindow(
     label: "Test Window",
     resetsAt,
     windowSeconds,
-    usedValue: 0,
-    limitValue: 100,
+    kind: "percent",
     ...overrides,
-  };
+  } as QuotaWindow;
 }
 
 describe("safePercent", () => {
@@ -118,6 +118,12 @@ describe("assessWindow", () => {
     expect(result.pacePercent).toBeLessThan(15);
     expect(result.projectedPercent).toBeGreaterThan(500);
     expect(result.severity).toBe("critical");
+  });
+});
+
+describe("formatResetTiming", () => {
+  it("renders elapsed resets as now, never in now", () => {
+    expect(formatResetTiming(new Date(Date.now() - 1))).toBe("now");
   });
 });
 

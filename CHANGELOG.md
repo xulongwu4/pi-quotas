@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-17
+
 ### Added
+- **Devin provider**: Daily and Weekly quota windows (used percentages with reset times) plus the monthly prompt-credit balance, surfaced in the dashboard, `/devin:quotas`, footer status, and quota warnings. Queries the Connect `GetUserStatus` endpoint on the Windsurf backend pi-devin streams through (catalog-class routing: always the Codeium host, not the inference `models.json` baseUrl), using the `devin` OAuth credential Pi stores after `/login devin`; `DEVIN_API_KEY` is a token fallback and `DEVIN_API_SERVER_URL` an endpoint override.
 - **Anthropic 7d Fable quota**: the dashboard, `/anthropic:quotas`, footer status, and warnings now surface the per-model weekly Fable window. Verified against a live `/api/oauth/usage` payload: Fable arrives as a `limits[]` entry with `kind: "weekly_scoped"` and `scope.model.display_name: "Fable"`; the legacy flat `seven_day_fable` key is still honoured, and generic `session`/`weekly_all` limit kinds are not duplicated. Scoped windows only appear when the subscription includes the model, so other plans are unchanged.
 
 ## [0.4.1] - 2026-09-16
