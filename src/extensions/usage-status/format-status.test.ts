@@ -186,7 +186,7 @@ describe("formatWindowStatus", () => {
     expect(result).toContain("85%");
   });
 
-  it("keeps label dim when severity is none", () => {
+  it("uses mdHeading for the label when severity is none", () => {
     const w: WindowStatus = {
       provider: "anthropic",
       label: "5h",
@@ -197,7 +197,7 @@ describe("formatWindowStatus", () => {
       kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("[dim]5h ");
+    expect(result).toContain("[mdHeading]5h ");
   });
 
   it("renders footer reset times with minute precision for every provider", () => {

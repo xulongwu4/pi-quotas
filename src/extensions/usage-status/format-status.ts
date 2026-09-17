@@ -28,6 +28,9 @@ export interface ThemeLike {
   fg(color: string, text: string): string;
 }
 
+/** Label color when the window is healthy — matches pi markdown headings. */
+const LABEL_COLOR = "mdHeading";
+
 const SHORT_LABELS: Record<string, string> = {
   "5h": "5h",
   "7d": "7d",
@@ -95,7 +98,7 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
 
   // Color the label based on severity: dim when safe, colored when at risk
   const isAtRisk = w.severity !== "none";
-  const labelColor = isAtRisk ? color : "dim";
+  const labelColor = isAtRisk ? color : LABEL_COLOR;
   const labelText = theme.fg(labelColor, `${short} `);
 
   const bar = renderBar(theme, w.usedPercent, color);
