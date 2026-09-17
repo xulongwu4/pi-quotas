@@ -79,7 +79,7 @@ export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowS
       const reset = w.resetsAt ? theme.fg("dim", ` ⟳ ${formatFooterReset(w.resetsAt)}`) : "";
       return `${core}${reset}`;
     })
-    .join(" ");
+    .join("  ");
 }
 
 export function toWindowStatus(window: QuotaWindow): WindowStatus {
