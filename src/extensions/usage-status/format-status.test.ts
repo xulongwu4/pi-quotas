@@ -224,8 +224,8 @@ describe("formatWindowStatus", () => {
 
       const result = formatStatus({ ui: { theme } } as any, [status]);
 
-      expect(result).toContain("(↺in 2h19m)");
-      expect(result).not.toContain("(↺in 3h)");
+      expect(result).toContain("⟳ 2h19m");
+      expect(result).not.toContain("⟳ 3h");
     }
   });
 
@@ -246,7 +246,7 @@ describe("formatWindowStatus", () => {
     );
 
     expect(result).toContain("cap ");
-    expect(result).not.toContain("↺");
+    expect(result).not.toContain("⟳");
     expect(result).not.toContain("soon");
   });
 
@@ -309,7 +309,7 @@ describe("formatWindowStatus", () => {
       ],
     );
 
-    expect(result).toContain("(↺now)");
-    expect(result).not.toContain("(↺in now)");
+    expect(result).toContain("⟳ now");
+    expect(result).not.toContain("⟳ in now");
   });
 });

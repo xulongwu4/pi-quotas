@@ -22,7 +22,7 @@ import {
 } from "../../lib/quotas.js";
 import {
   assessWindow,
-  formatResetTiming,
+  formatTimeRemaining,
 } from "../../utils/quotas-severity.js";
 import type { QuotaWindow } from "../../types/quotas.js";
 import { formatWindowStatus, type WindowStatus } from "./format-status.js";
@@ -63,7 +63,7 @@ export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowS
   return windows
     .map((w) => {
       const core = formatWindowStatus(theme, w);
-      const reset = w.resetsAt ? theme.fg("dim", ` (↺${formatResetTiming(w.resetsAt)})`) : "";
+      const reset = w.resetsAt ? theme.fg("dim", ` ⟳ ${formatTimeRemaining(w.resetsAt)}`) : "";
       return `${core}${reset}`;
     })
     .join(" ");
