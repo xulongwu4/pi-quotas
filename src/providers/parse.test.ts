@@ -6,7 +6,7 @@ import { parseKimiCodingUsage } from "./providers.js";
 import { parseOpenRouterUsage } from "./providers.js";
 import { parseSyntheticUsage } from "./providers.js";
 import { parseZaiUsage } from "./providers.js";
-import { parseDevinUsage } from "./providers.js";
+import { parseCursorUsage, parseDevinUsage } from "./providers.js";
 import { parseOpenCodeGoUsage } from "./providers.js";
 import { parseGrokUsage } from "./providers.js";
 import { parseAntigravityUsage } from "./providers.js";
@@ -1206,5 +1206,86 @@ describe("parseDevinUsage", () => {
     expect(
       parseDevinUsage({ planStatus: { dailyQuotaRemainingPercent: 50 } }),
     ).toHaveLength(1);
+  });
+});
+
+describe("parseCursorUsage", () => {
+  it("maps the three percent counters from GetCurrentPeriodUsage", () => {
+    const windows = parseCursorUsage({
+      billingCycleEnd: "1789632000000",
+      planUsage: {
+        totalPercentUsed: 0.73,
+        autoPercentUsed: 0.767,
+        apiPercentUsed: 1.38,
+        // the includedSpend/limit spend ratio is intentionally not a window
+        includedSpend: 345,
+        limit: 2000,
+      },
+      spendLimitUsage: { limitType: "user" },
+    });
+
+    expect(windows).toHaveLength(3);
+    expect(windows[0]).toMatchObject({
+      provider: "cursor",
+      label: "Total",
+      usedPercent: 0.73,
+      resetsAt: new Date(1789632000000),
+      kind: "percent",
+    });
+    expect(windows[1]).toMatchObject({
+      label: "Cursor models",
+      usedPercent: 0.767,
+    });
+    expect(windows[2]).toMatchObject({
+      label: "Other models",
+      usedPercent: 1.38,
+    });
+    expect(windows.some((w) => w.kind === "currency")).toBe(false);
+  });
+
+  it("maps on-demand spend as dollars from the usage-summary shape", () => {
+    const windows = parseCursorUsage({
+      billingCycleEnd: "2026-05-01T00:00:00Z",
+      membershipType: "pro",
+      individualUsage: {
+        plan: { totalPercentUsed: 10 },
+        onDemand: { enabled: true, used: 450, limit: 2000 },
+      },
+    });
+
+    expect(windows).toHaveLength(2);
+    expect(windows[1]).toMatchObject({
+      label: "On-demand",
+      usedPercent: 22.5,
+      usedValue: 4.5,
+      limitValue: 20,
+      kind: "currency",
+    });
+  });
+
+  it("ignores a plan spend pair with no percent counters", () => {
+    const windows = parseCursorUsage({
+      individualUsage: { plan: { used: 250, limit: 1000 } },
+    });
+
+    expect(windows).toHaveLength(0);
+  });
+
+  it("skips disabled on-demand and JSON-null percents", () => {
+    const windows = parseCursorUsage({
+      individualUsage: {
+        plan: { totalPercentUsed: 5, autoPercentUsed: null, apiPercentUsed: null },
+        onDemand: { enabled: false, used: 900, limit: 2000 },
+      },
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0].label).toBe("Total");
+  });
+
+  it("returns empty array for invalid or empty payloads", () => {
+    expect(parseCursorUsage(null)).toHaveLength(0);
+    expect(parseCursorUsage({})).toHaveLength(0);
+    expect(parseCursorUsage({ planUsage: {} })).toHaveLength(0);
   });
 });

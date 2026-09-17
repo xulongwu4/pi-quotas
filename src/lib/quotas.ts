@@ -14,6 +14,7 @@ export const SUPPORTED_PROVIDERS: SupportedQuotaProvider[] = [
   "grok",
   "antigravity",
   "devin",
+  "cursor",
 ];
 
 export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
@@ -28,6 +29,7 @@ export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
   grok: "Grok",
   antigravity: "Antigravity",
   devin: "Devin",
+  cursor: "Cursor",
 };
 
 const DEFAULT_PROVIDER_TTL_MS = 60_000;
@@ -46,6 +48,7 @@ const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
   // GetUserStatus returns the full ~370KB model catalog for ~1KB of
   // planStatus; poll it less often than the small usage endpoints.
   devin: 5 * 60_000,
+  cursor: DEFAULT_PROVIDER_TTL_MS,
 };
 
 const ERROR_TTL_MS = 10_000;

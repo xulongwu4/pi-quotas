@@ -76,5 +76,11 @@ export function getProviderCommandInfo(
         commandName: "devin:quotas",
         title: "Devin Quotas",
       };
+    case "cursor":
+      return {
+        provider,
+        commandName: "cursor:quotas",
+        title: "Cursor Quotas",
+      };
   }
 }

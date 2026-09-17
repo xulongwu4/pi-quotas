@@ -8,6 +8,7 @@ import {
   parseAnthropicUsage,
   parseAntigravityUsage,
   parseCodexUsage,
+  parseCursorUsage,
   parseDevinUsage,
   parseGitHubCopilotUsage,
   parseGrokUsage,
@@ -754,6 +755,121 @@ export async function fetchDevinQuotas(
   );
 }
 
+/**
+ * pi-ai has no `cursor` OAuth provider, so `authStorage.getApiKey("cursor")`
+ * cannot mint a usable token: it returns undefined, or a models.json fallback
+ * key the dashboard RPC rejects with HTTP 401. Read the OAuth credential
+ * pi-cursor stores after `/login cursor` directly, like the Antigravity and
+ * GitHub Copilot paths do, and never fall back to getApiKey().
+ */
+function cursorStoredAccessToken(
+  authStorage: AuthStorage,
+): string | undefined {
+  const credential = authStorage.get("cursor") as any;
+  for (const value of [credential?.access, credential?.key]) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Cursor answers a rejected credential with `{"code":"unauthenticated",
+ * "message":"Error"}` (the useful text is buried in `details[].debug`), so the
+ * cleaned body renders as a bare "Error" row. Replace it with something
+ * actionable and keep every other status's own message.
+ */
+function cursorAuthMessage(result: {
+  status?: number;
+  message: string;
+}): string {
+  if (result.status !== 401 && result.status !== 403) return result.message;
+  return "Cursor credentials rejected - run /login cursor, or set CURSOR_ACCESS_TOKEN / CURSOR_USAGE_SESSION_TOKEN";
+}
+
+/**
+ * Cursor quotas. The Connect DashboardService RPC on api2.cursor.sh is the
+ * primary source (same host and bearer token pi-cursor uses for catalog
+ * calls); the cursor.com dashboard endpoint is a cookie-authenticated
+ * fallback for accounts whose access token cannot read the RPC.
+ */
+export async function fetchCursorQuotasWithToken(
+  accessToken: string | undefined,
+  signal?: AbortSignal,
+  sessionToken?: string,
+): Promise<QuotasResult> {
+  if (!accessToken && !sessionToken) {
+    return failure(
+      "No Cursor credentials found (set CURSOR_ACCESS_TOKEN or CURSOR_USAGE_SESSION_TOKEN)",
+      "config",
+    );
+  }
+
+  if (accessToken) {
+    const result = await fetchJson(
+      "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Connect-Protocol-Version": "1",
+          Accept: "application/json",
+        },
+        body: "{}",
+      },
+      signal,
+    );
+    if (result.ok) {
+      const windows = parseCursorUsage(result.data);
+      if (windows.length > 0) return success("cursor", windows);
+    }
+    // An aborted or timed-out call must not be retried on the fallback, and
+    // without a cookie there is nothing left to try.
+    if (
+      !sessionToken ||
+      (!result.ok &&
+        (result.kind === "cancelled" || result.kind === "timeout"))
+    ) {
+      return result.ok
+        ? failure("Cursor usage endpoint returned no quota windows", "http")
+        : failure(cursorAuthMessage(result), result.kind);
+    }
+  }
+
+  const summary = await fetchJson(
+    "https://cursor.com/api/usage-summary",
+    {
+      headers: {
+        Cookie: `WorkosCursorSessionToken=${sessionToken}`,
+        Accept: "application/json",
+      },
+    },
+    signal,
+  );
+  if (!summary.ok) return failure(cursorAuthMessage(summary), summary.kind);
+  const windows = parseCursorUsage(summary.data);
+  // An unparseable 200 must fail like the RPC path, not render as a quiet
+  // empty provider with no explanation.
+  if (windows.length === 0)
+    return failure("Cursor usage endpoint returned no quota windows", "http");
+  return success("cursor", windows);
+}
+
+export async function fetchCursorQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  // getApiKey() is deliberately not consulted: it can only return a
+  // models.json fallback key, which api2 rejects with 401 — a doomed request
+  // on every poll that would also shadow a working CURSOR_ACCESS_TOKEN.
+  // CURSOR_ACCESS_TOKEN is the same env name pi-cursor itself reads.
+  return fetchCursorQuotasWithToken(
+    cursorStoredAccessToken(authStorage) ?? process.env.CURSOR_ACCESS_TOKEN,
+    signal,
+    process.env.CURSOR_USAGE_SESSION_TOKEN,
+  );
+}
+
 /** Shared cancelled error shape, used by both the HTTP abort path and
  * superseded cache waiters so the copy cannot drift between them. */
 export function cancelledError(): { message: string; kind: "cancelled" } {
@@ -772,4 +888,5 @@ export const PROVIDER_FETCHERS = {
   grok: fetchGrokQuotas,
   antigravity: fetchAntigravityQuotas,
   devin: fetchDevinQuotas,
+  cursor: fetchCursorQuotas,
 } as const;

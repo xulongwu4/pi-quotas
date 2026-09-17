@@ -5,6 +5,8 @@ import {
   fetchAntigravityQuotas,
   fetchAntigravityQuotasWithToken,
   fetchCodexQuotasWithToken,
+  fetchCursorQuotas,
+  fetchCursorQuotasWithToken,
   fetchDevinQuotasWithToken,
   fetchGitHubCopilotQuotas,
   fetchGitHubCopilotQuotasWithToken,
@@ -789,5 +791,116 @@ describe("fetchOpenCodeGoQuotas", () => {
         }),
       }),
     );
+  });
+});
+
+describe("fetchCursorQuotasWithToken", () => {
+  it("returns config error when no credentials are provided", async () => {
+    const result = await fetchCursorQuotasWithToken(undefined);
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "config" },
+    });
+  });
+
+  it("parses plan windows from the dashboard RPC", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          billingCycleEnd: "1791256702865",
+          planUsage: { totalPercentUsed: 12, autoPercentUsed: 3, apiPercentUsed: 0 },
+        }),
+        { status: 200 },
+      ),
+    ) as any;
+
+    const result = await fetchCursorQuotasWithToken("cursor-token");
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("cursor");
+      expect(result.data.windows[0]).toMatchObject({ label: "Total", usedPercent: 12 });
+    }
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer cursor-token" }),
+      }),
+    );
+  });
+
+  it("replaces Cursor's bare \"Error\" 401 body with an actionable message", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: "unauthenticated", message: "Error" }), {
+        status: 401,
+      }),
+    ) as any;
+
+    const result = await fetchCursorQuotasWithToken("stale-token");
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain("/login cursor");
+      expect(result.error.message).not.toBe("Error");
+    }
+  });
+});
+
+describe("fetchCursorQuotas", () => {
+  it("uses the stored OAuth access token, since getApiKey cannot mint one", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ planUsage: { totalPercentUsed: 1 } }), { status: 200 }),
+      ) as any;
+
+    const auth = {
+      get: (provider: string) =>
+        provider === "cursor"
+          ? { type: "oauth", access: "stored-cursor-token", refresh: "r", expires: 0 }
+          : undefined,
+      // models.json fallback keys are what produced the rejected-token row
+      getApiKey: async () => "unusable-fallback-key",
+    } as unknown as AuthStorage;
+
+    const result = await fetchCursorQuotas(auth);
+
+    expect(result.success).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer stored-cursor-token" }),
+      }),
+    );
+  });
+
+  it("never calls getApiKey, whose models.json fallback key api2 rejects", async () => {
+    const getApiKey = vi.fn(async () => "unusable-fallback-key");
+    const auth = { get: () => undefined, getApiKey } as unknown as AuthStorage;
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as any;
+
+    const result = await fetchCursorQuotas(auth);
+
+    expect(getApiKey).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+  });
+
+  it("reports an empty cookie-fallback payload as an error, not empty success", async () => {
+    process.env.CURSOR_USAGE_SESSION_TOKEN = "cookie-token";
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({}), { status: 200 })) as any;
+
+    const auth = { get: () => undefined, getApiKey: async () => undefined } as unknown as AuthStorage;
+    const result = await fetchCursorQuotas(auth);
+    delete process.env.CURSOR_USAGE_SESSION_TOKEN;
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { kind: "http" },
+    });
   });
 });

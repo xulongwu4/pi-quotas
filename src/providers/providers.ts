@@ -1079,3 +1079,80 @@ export function parseDevinUsage(data: any): QuotaWindow[] {
 
   return windows;
 }
+
+// Cursor plan usage. Two payload shapes are accepted: the Connect
+// DashboardService/GetCurrentPeriodUsage response (planUsage + ms-epoch
+// billing cycle) and the cursor.com/api/usage-summary response
+// (individualUsage.plan / individualUsage.onDemand).
+//
+// Plan usage is reported as percent-only: Cursor's own percentages are
+// authoritative, while the paired used/limit fields are spend amounts whose
+// unit varies by plan. On-demand spend is documented in cents.
+export function parseCursorUsage(data: any): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  if (!data || typeof data !== "object") return windows;
+
+  const plan = data.individualUsage?.plan ?? data.planUsage;
+  const onDemand = data.individualUsage?.onDemand ?? data.teamUsage?.onDemand;
+  const resetsAt = parseDateish(data.billingCycleEnd);
+  const windowSeconds =
+    resetsAt != null ? monthWindowSeconds(resetsAt) : 30 * 24 * 60 * 60;
+
+  const pushPercent = (
+    label: string,
+    value: unknown,
+    showPace: boolean,
+  ): void => {
+    // Number(null) is 0, so a JSON null must be skipped explicitly or the
+    // window would render as fully unused.
+    if (value == null) return;
+    const percent = Number(value);
+    if (!Number.isFinite(percent)) return;
+    windows.push({
+      provider: "cursor",
+      label,
+      resetsAt,
+      windowSeconds,
+      ...percentOnly(Math.max(0, Math.min(100, percent))),
+      showPace,
+      nextLabel: "Resets",
+    });
+  };
+
+  // The three percent counters Cursor reports. `Cursor models` and
+  // `Other models` mirror cursor.com/dashboard/spending, which splits usage
+  // by how the model was chosen: Auto-selected (see `autoBucketModels`) vs
+  // explicitly named. `Total` is Cursor's own combined counter and is not
+  // the sum of the two. The `includedSpend`/`limit` cents pair is
+  // deliberately not surfaced: it is a separate spend ratio that no verified
+  // dashboard surface shows, and mixing it with these percentages confused
+  // more than it explained.
+  pushPercent("Total", plan?.totalPercentUsed, true);
+  pushPercent("Cursor models", plan?.autoPercentUsed, false);
+  pushPercent("Other models", plan?.apiPercentUsed, false);
+
+  const onDemandLimit = Number(onDemand?.limit);
+  const onDemandUsed = Number(onDemand?.used ?? 0);
+  if (
+    onDemand?.enabled !== false &&
+    Number.isFinite(onDemandLimit) &&
+    onDemandLimit > 0 &&
+    Number.isFinite(onDemandUsed)
+  ) {
+    windows.push({
+      provider: "cursor",
+      label: "On-demand",
+      usedPercent: safePercent(onDemandUsed, onDemandLimit),
+      resetsAt,
+      windowSeconds,
+      usedValue: onDemandUsed / 100,
+      limitValue: onDemandLimit / 100,
+      kind: "currency",
+      showPace: true,
+      paceScale: 1,
+      nextLabel: "Resets",
+    });
+  }
+
+  return windows;
+}

@@ -2,7 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-09-17
+
+### Added
+- **Cursor provider**: Cursor's usage percent counters and on-demand spend, surfaced in the dashboard, `/cursor:quotas`, footer status, and quota warnings. Primary source is the Connect `aiserver.v1.DashboardService/GetCurrentPeriodUsage` RPC on `api2.cursor.sh` using the `cursor` credential Pi stores after `/login cursor` (`CURSOR_ACCESS_TOKEN` as a fallback); `CURSOR_USAGE_SESSION_TOKEN` enables the cookie-authenticated `cursor.com/api/usage-summary` fallback. The token is read straight from the `cursor` OAuth credential in `auth.json` (pi-ai has no `cursor` OAuth provider, so `getApiKey("cursor")` returns nothing usable), and a rejected credential reports an actionable message instead of Cursor's bare `{"message":"Error"}` 401 body. `Cursor models` and `Other models` mirror cursor.com/dashboard/spending's Auto-selected vs named-model split (`autoPercentUsed`/`apiPercentUsed`), and `Total` is Cursor's own combined counter (`totalPercentUsed`), which is not their sum. The `includedSpend`/`limit` cents pair is not surfaced: it is a separate spend ratio matching only the payload's own `displayMessage`, with no verified dashboard surface.
 
 ## [0.6.1] - 2026-09-17
 

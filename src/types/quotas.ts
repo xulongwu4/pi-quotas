@@ -9,7 +9,8 @@ export type SupportedQuotaProvider =
   | "kimi-coding"
   | "grok"
   | "antigravity"
-  | "devin";
+  | "devin"
+  | "cursor";
 
 export type QuotasErrorKind =
   | "cancelled"
