@@ -111,7 +111,7 @@ describe("formatWindowStatus", () => {
       kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("sub ");
+    expect(result).toContain("Sub ");
     expect(result).toContain("40%");
   });
 
@@ -134,7 +134,7 @@ describe("formatWindowStatus", () => {
       limited: false,
       kind: "percent",
     };
-    expect(formatWindowStatus(theme, w1)).toContain("gem-5h ");
+    expect(formatWindowStatus(theme, w1)).toContain("Gem-5h ");
     expect(formatWindowStatus(theme, w2)).toContain("3p-7d ");
   });
 
@@ -200,7 +200,7 @@ describe("formatWindowStatus", () => {
     expect(result).toContain("[mdHeading]5h ");
   });
 
-  it("renders footer reset times with minute precision for every provider", () => {
+  it("renders footer reset times in whole hours once past an hour", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-06T05:28:37Z"));
 
@@ -224,8 +224,8 @@ describe("formatWindowStatus", () => {
 
       const result = formatStatus({ ui: { theme } } as any, [status]);
 
-      expect(result).toContain("⟳ 2h19m");
-      expect(result).not.toContain("⟳ 3h");
+      expect(result).toContain("⟳ 3h");
+      expect(result).not.toContain("⟳ 2h19m");
     }
   });
 
@@ -245,7 +245,7 @@ describe("formatWindowStatus", () => {
       ],
     );
 
-    expect(result).toContain("cap ");
+    expect(result).toContain("Cap ");
     expect(result).not.toContain("⟳");
     expect(result).not.toContain("soon");
   });

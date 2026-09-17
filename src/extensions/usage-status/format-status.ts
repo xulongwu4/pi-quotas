@@ -93,7 +93,8 @@ function renderBar(theme: ThemeLike, usedPercent: number, color: string): string
  *   shared display value so no information is lost vs. the old format
  */
 export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
-  const short = SHORT_LABELS[w.label] ?? w.label;
+  const raw = SHORT_LABELS[w.label] ?? w.label;
+  const short = raw.charAt(0).toUpperCase() + raw.slice(1);
   const color = getSeverityColor(w.severity);
 
   // Color the label based on severity: dim when safe, colored when at risk

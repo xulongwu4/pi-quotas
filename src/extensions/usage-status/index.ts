@@ -58,12 +58,21 @@ function getContextProvider(
   }
 }
 
+/** Footer reset text: hours only once the wait is an hour or more. */
+function formatFooterReset(date: Date): string {
+  const ms = date.getTime() - Date.now();
+  if (ms >= 60 * 60 * 1000) {
+    return `${Math.ceil(ms / (60 * 60 * 1000))}h`;
+  }
+  return formatTimeRemaining(date);
+}
+
 export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
   const theme = ctx.ui.theme;
   return windows
     .map((w) => {
       const core = formatWindowStatus(theme, w);
-      const reset = w.resetsAt ? theme.fg("dim", ` ⟳ ${formatTimeRemaining(w.resetsAt)}`) : "";
+      const reset = w.resetsAt ? theme.fg("dim", ` ⟳ ${formatFooterReset(w.resetsAt)}`) : "";
       return `${core}${reset}`;
     })
     .join(" ");
