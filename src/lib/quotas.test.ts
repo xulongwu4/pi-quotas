@@ -111,3 +111,19 @@ describe("fetchProviderQuotas shared cancellation", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("rate-limit backoff", () => {
+  it("does not refetch a 429 result at the normal error cadence", async () => {
+    const rateLimited: QuotasResult = {
+      success: false,
+      error: { message: "Rate limited. Please try again later.", kind: "rate_limit" },
+    };
+    const fetcher = vi.fn(async () => rateLimited);
+    setDevinFetcher(fetcher);
+
+    expect(await fetchProviderQuotas(authStorage, "devin")).toMatchObject(rateLimited);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    expect(await fetchProviderQuotas(authStorage, "devin")).toMatchObject(rateLimited);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});

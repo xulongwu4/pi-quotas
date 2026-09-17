@@ -68,7 +68,7 @@ type FetchJsonResult =
       ok: false;
       status?: number;
       message: string;
-      kind: "timeout" | "cancelled" | "http" | "network";
+      kind: "timeout" | "cancelled" | "http" | "rate_limit" | "network";
     };
 
 /**
@@ -116,7 +116,7 @@ async function fetchJson(
         ok: false,
         status: response.status,
         message: cleanHttpErrorMessage(body) || response.statusText || `HTTP ${response.status}`,
-        kind: "http",
+        kind: response.status === 429 ? "rate_limit" : "http",
       };
     }
     return { ok: true, data: await response.json() };

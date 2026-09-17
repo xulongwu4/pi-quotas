@@ -16,6 +16,9 @@ export type QuotasErrorKind =
   | "timeout"
   | "config"
   | "http"
+  // HTTP 429 from the provider's own quota endpoint. Back off hard:
+  // retrying at the normal error cadence keeps the limiter tripped.
+  | "rate_limit"
   | "network"
   // The provider is not applicable for the stored credential type
   // (e.g. a direct Anthropic API key has no OAuth subscription usage to

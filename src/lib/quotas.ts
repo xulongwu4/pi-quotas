@@ -49,6 +49,9 @@ const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
 };
 
 const ERROR_TTL_MS = 10_000;
+// A 429 means the provider's quota endpoint is throttling us; re-asking every
+// 10s just keeps it tripped (and burns nothing useful).
+const RATE_LIMIT_TTL_MS = 5 * 60_000;
 
 type InFlightFetch = {
   promise: Promise<QuotasResult>;
@@ -185,10 +188,11 @@ export async function fetchProviderQuotas(
   if (options?.signal?.aborted) return cancelledResult();
   const entry = cache.get(provider) ?? {};
   const now = Date.now();
-  const ttl =
-    entry.result && !entry.result.success
-      ? ERROR_TTL_MS
-      : PROVIDER_TTLS_MS[provider];
+  const ttl = !entry.result?.success
+    ? entry.result?.error.kind === "rate_limit"
+      ? RATE_LIMIT_TTL_MS
+      : ERROR_TTL_MS
+    : PROVIDER_TTLS_MS[provider];
 
   if (
     !options?.force &&

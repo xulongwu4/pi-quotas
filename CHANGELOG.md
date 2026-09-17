@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-17
+
+### Fixed
+- **Back off when a provider rate-limits its own quota endpoint**: HTTP 429 responses now map to a dedicated `rate_limit` error kind and are cached for 5 minutes instead of the 10-second error TTL, so the 60-second footer refresh stops re-poking a throttled endpoint and keeping the limiter tripped. Prompted by `api.anthropic.com/api/oauth/usage` returning `Rate limited. Please try again later.` (`retry-after: 0`) while `/v1/messages` and `/api/oauth/profile` stayed healthy — i.e. an endpoint-specific limit, not an account or token problem.
+
 ## [0.6.0] - 2026-09-17
 
 ### Changed
