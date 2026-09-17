@@ -31,7 +31,8 @@ describe("formatWindowStatus", () => {
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("293/300");
-    expect(result).toContain("[success]");
+    expect(result).toContain("[dim]░░░░░░░░[/dim]");
+    expect(result).toContain("2%");
   });
 
   it("kind=counts renders real counts even when limitValue is 100 (Devin credits)", () => {
@@ -48,6 +49,7 @@ describe("formatWindowStatus", () => {
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("40/100");
+    expect(result).toContain("60%");
     expect(result).not.toContain("% left");
   });
 
@@ -62,7 +64,9 @@ describe("formatWindowStatus", () => {
       kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("75% left");
+    expect(result).toContain("25%");
+    expect(result).toContain("[success]██[/success]");
+    expect(result).toContain("[dim]░░░░░░[/dim]");
     expect(result).not.toContain("/100");
   });
 
@@ -92,7 +96,7 @@ describe("formatWindowStatus", () => {
       kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("91% left");
+    expect(result).toContain("9%");
     expect(result).toContain("[success]");
   });
 
@@ -107,8 +111,8 @@ describe("formatWindowStatus", () => {
       kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("sub:");
-    expect(result).toContain("60% left");
+    expect(result).toContain("sub ");
+    expect(result).toContain("40%");
   });
 
   it("formats Antigravity windows with custom short labels", () => {
@@ -130,8 +134,8 @@ describe("formatWindowStatus", () => {
       limited: false,
       kind: "percent",
     };
-    expect(formatWindowStatus(theme, w1)).toContain("gem-5h:");
-    expect(formatWindowStatus(theme, w2)).toContain("3p-7d:");
+    expect(formatWindowStatus(theme, w1)).toContain("gem-5h ");
+    expect(formatWindowStatus(theme, w2)).toContain("3p-7d ");
   });
 
   it("shows currency for currency windows (Anthropic extra)", () => {
@@ -178,8 +182,8 @@ describe("formatWindowStatus", () => {
     };
     const result = formatWindowStatus(theme, w);
     // label should be colored with error (high maps to error)
-    expect(result).toContain("[error]7d:");
-    expect(result).toContain("15% left");
+    expect(result).toContain("[error]7d ");
+    expect(result).toContain("85%");
   });
 
   it("keeps label dim when severity is none", () => {
@@ -193,7 +197,7 @@ describe("formatWindowStatus", () => {
       kind: "percent",
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("[dim]5h:");
+    expect(result).toContain("[dim]5h ");
   });
 
   it("renders footer reset times with minute precision for every provider", () => {
@@ -241,7 +245,7 @@ describe("formatWindowStatus", () => {
       ],
     );
 
-    expect(result).toContain("cap:");
+    expect(result).toContain("cap ");
     expect(result).not.toContain("↺");
     expect(result).not.toContain("soon");
   });

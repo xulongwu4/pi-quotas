@@ -1,8 +1,5 @@
 import type { QuotaWindow } from "../../types/quotas.js";
-import {
-  formatQuotaDisplay,
-  remainingPercent,
-} from "../../utils/quotas-format.js";
+import { formatQuotaDisplay } from "../../utils/quotas-format.js";
 import type { RiskSeverity } from "../../utils/quotas-severity.js";
 import { getSeverityColor } from "../../utils/quotas-severity.js";
 
@@ -70,14 +67,27 @@ const SHORT_LABELS: Record<string, string> = {
   "Claude/GPT 7d": "3p-7d",
 };
 
+const BAR_WIDTH = 8;
+
+/** Block-bar lane in the pi-usage-bars style: `████████░░` colored by used%. */
+function renderBar(theme: ThemeLike, usedPercent: number, color: string): string {
+  const clamped = Number.isFinite(usedPercent)
+    ? Math.max(0, Math.min(100, usedPercent))
+    : 0;
+  const filled = Math.round((clamped / 100) * BAR_WIDTH);
+  return (
+    theme.fg(color, "█".repeat(filled)) +
+    theme.fg("dim", "░".repeat(BAR_WIDTH - filled))
+  );
+}
+
 /**
- * Format a single window for the footer status bar.
+ * Format a single window for the footer status bar, in the pi-usage-bars
+ * lane form: `label ██████░░ NN% <value>`.
  *
- * - Colors both the label and value based on severity
- * - Uses used/limit for real counts (e.g. "7/300")
- * - Uses "$X/$Y" for currency windows
- * - Uses "N% left" for percentage-only windows
- * - Uses "REACHED" / "OK" for spend cap
+ * - Bar fill and color track usedPercent/severity for every kind
+ * - Percent lanes show "<used>%"; counts/currency/spend-cap append their
+ *   shared display value so no information is lost vs. the old format
  */
 export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
   const short = SHORT_LABELS[w.label] ?? w.label;
@@ -86,22 +96,18 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
   // Color the label based on severity: dim when safe, colored when at risk
   const isAtRisk = w.severity !== "none";
   const labelColor = isAtRisk ? color : "dim";
-  const labelText = theme.fg(labelColor, `${short}:`);
+  const labelText = theme.fg(labelColor, `${short} `);
 
-  // Synthetic windows always use compact "remaining%" format
-  // to match the pi-synthetic extension display.
-  const isSynthetic = w.provider === "synthetic";
+  const bar = renderBar(theme, w.usedPercent, color);
+  const usedPct = Number.isFinite(w.usedPercent)
+    ? Math.max(0, Math.min(100, Math.round(w.usedPercent)))
+    : 0;
+  const pctText = theme.fg(color, `${usedPct}%`);
 
-  let valueText: string;
-  if (isSynthetic) {
-    // Compact format matching pi-synthetic: just remaining%
-    valueText = theme.fg(color, `${remainingPercent(w)}%`);
-  } else {
-    // Shared value + suffix (types/quotas) keeps footer, dashboard, and
-    // notify fallback in agreement.
-    valueText = theme.fg(color, formatQuotaDisplay(w));
-  }
+  // For non-percent kinds append the shared display value (counts, currency,
+  // spend-cap) so the lane still carries the real numbers.
+  const extra = w.kind === "percent" ? "" : ` ${theme.fg(color, formatQuotaDisplay(w))}`;
 
   const limitTag = w.limited ? theme.fg("error", " !") : "";
-  return `${labelText}${valueText}${limitTag}`;
+  return `${labelText}${bar} ${pctText}${extra}${limitTag}`;
 }
