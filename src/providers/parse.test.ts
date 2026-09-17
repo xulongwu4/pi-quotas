@@ -72,6 +72,7 @@ describe("parseAnthropicUsage", () => {
         utilization: 23,
         resets_at: "2026-04-26T23:00:00Z",
       },
+      seven_day_fable: { utilization: 11, resets_at: "2026-04-26T23:00:00Z" },
       seven_day_opus: null,
     });
 
@@ -79,6 +80,29 @@ describe("parseAnthropicUsage", () => {
     const opus = windows.find((w) => w.label === "7d Opus");
     expect(sonnet).toMatchObject({ usedPercent: 8 });
     expect(opus).toMatchObject({ usedPercent: 23 });
+    const fable = windows.find((w) => w.label === "7d Fable");
+    expect(fable).toMatchObject({ usedPercent: 11 });
+  });
+
+  it("maps limits[] weekly_scoped entries (modern format)", () => {
+    const windows = parseAnthropicUsage({
+      five_hour: { utilization: 5, resets_at: "2026-04-22T09:00:00Z" },
+      limits: [
+        { kind: "session", group: "session", percent: 40 },
+        { kind: "weekly_all", group: "weekly", percent: 11, resets_at: "2026-04-23T23:00:00Z" },
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 9,
+          resets_at: "2026-04-23T23:00:01Z",
+          scope: { model: { id: null, display_name: "Fable" } },
+        },
+      ],
+    });
+    const fable = windows.find((w) => w.label === "7d Fable");
+    expect(fable).toMatchObject({ usedPercent: 9, windowSeconds: 7 * 24 * 60 * 60 });
+    // generic kinds must not create 5h/7d windows of their own
+    expect(windows.filter((w) => w.label === "session" || w.label === "weekly_all")).toHaveLength(0);
   });
 
   it("skips extra_usage when disabled", () => {

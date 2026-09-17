@@ -54,6 +54,7 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
   const modelWindows: Array<[string, string]> = [
     ["seven_day_sonnet", "7d Sonnet"],
     ["seven_day_omelette", "7d Opus"],
+    ["seven_day_fable", "7d Fable"],
     ["seven_day_opus", "7d Opus (legacy)"],
   ];
   for (const [key, label] of modelWindows) {
@@ -71,6 +72,29 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
         nextLabel: "Resets",
       });
     }
+  }
+
+  // Modern limits[] format: per-model scoped weekly windows (e.g. Fable).
+  // Generic kinds (session/weekly_all) duplicate the 5h/7d windows above.
+  const existing = new Set(windows.map((w) => w.label));
+  for (const entry of Array.isArray(data?.limits) ? data.limits : []) {
+    if (entry?.kind !== "weekly_scoped") continue;
+    const model = entry.scope?.model?.display_name;
+    if (typeof model !== "string" || !model) continue;
+    const label = `7d ${model}`;
+    if (existing.has(label)) continue;
+    existing.add(label);
+    windows.push({
+      provider: "anthropic",
+      label,
+      usedPercent: Number(entry.percent ?? 0),
+      resetsAt: parseDateish(entry.resets_at),
+      windowSeconds: 7 * 24 * 60 * 60,
+      usedValue: Number(entry.percent ?? 0),
+      limitValue: 100,
+      showPace: false,
+      nextLabel: "Resets",
+    });
   }
 
   // Extra usage (overage budget)
