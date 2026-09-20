@@ -1,6 +1,6 @@
 # @latentminds/pi-quotas
 
-Quota monitoring for Pi. Shows remaining usage and rate limits for Anthropic, OpenAI Codex, GitHub Copilot, OpenRouter, Synthetic, Z.ai, OpenCode Go, Kimi Code, Grok (xAI), and Antigravity — directly in your Pi session.
+Quota monitoring for Pi. Shows remaining usage and rate limits for Anthropic, OpenAI Codex, GitHub Copilot, OpenRouter, Synthetic, Z.ai, OpenCode Go, Kimi Code, Grok (xAI), Antigravity, and ClinePass — directly in your Pi session.
 
 ## Screenshots
 
@@ -49,6 +49,7 @@ pi -e npm:@latentminds/pi-quotas
 | `/antigravity:quotas`| Antigravity quotas only                    |
 | `/devin:quotas`      | Devin quotas only                          |
 | `/cursor:quotas`     | Cursor quotas only                         |
+| `/cline:quotas`      | ClinePass quotas only                      |
 | `/tokens`            | Cross-session token/cost usage            |
 | `/quotas:settings`   | Toggle individual features on or off       |
 
@@ -72,7 +73,7 @@ Automatic notifications when projected usage is on track to exceed limits before
 Use `/quotas:settings` to enable or disable:
 
 - Combined `/quotas` command
-- Per-provider commands (`/anthropic:quotas`, `/codex:quotas`, `/github:quotas`, `/openrouter:quotas`, `/synthetic:quotas`, `/zai:quotas`, `/opencode-go:quotas`, `/kimi:quotas`, `/grok:quotas`, `/antigravity:quotas`, `/devin:quotas`, `/cursor:quotas`)
+- Per-provider commands (`/anthropic:quotas`, `/codex:quotas`, `/github:quotas`, `/openrouter:quotas`, `/synthetic:quotas`, `/zai:quotas`, `/opencode-go:quotas`, `/kimi:quotas`, `/grok:quotas`, `/antigravity:quotas`, `/devin:quotas`, `/cursor:quotas`, `/cline:quotas`)
 - Footer status widget
 - Quota warning notifications
 - **Defer to Synthetic** — when both pi-quotas and [pi-synthetic](https://www.npmjs.com/package/@aliou/pi-synthetic) are loaded, pi-quotas hides its own Synthetic footer to avoid showing duplicate quota information. Enabled by default; disable if you prefer to see both footers.
@@ -96,6 +97,7 @@ Settings can be saved globally (`$PI_CODING_AGENT_DIR/quotas.json`, defaulting t
 | Antigravity    | Gemini 5h/7d, Claude/GPT 5h/7d                               | Google Antigravity and agy CLI quota tracking with Gemini and Claude/GPT model group buckets             |
 | Devin          | Daily, weekly, credits / month                               | Daily/weekly quota percentages with reset times and monthly prompt-credit balance from the same Windsurf backend pi-devin uses |
 | Cursor         | Total, cursor models, other models, on-demand                 | Cursor's combined usage counter, the `dashboard/spending` Auto-selected vs named-model percent splits, and on-demand spend |
+| ClinePass      | 5h, 7d, 30d                                                   | `/api/v1/users/me/plan/usage-limits` — the same percentages the Cline web dashboard shows, with their reset times |
 
 
 ## Credentials
@@ -113,6 +115,7 @@ pi-quotas reads existing Pi auth entries from `~/.pi/agent/auth.json`:
 - `grok` (or `xai`) — Grok OAuth access token (also automatically reads `~/.grok/auth.json` created by `grok login`)
 - `antigravity` — Google Antigravity OAuth token from `/login antigravity` (also reads `~/.codexbar/antigravity/oauth_creds.json`)
 - `cursor` — Cursor access token from `/login cursor` (the pi-cursor extension); `CURSOR_ACCESS_TOKEN` as a token fallback and `CURSOR_USAGE_SESSION_TOKEN` (dashboard cookie) as a last resort
+- `cline-pass` (or `cline`) — Cline API key from `/login` → ClinePass (the pi-cline-pass extension); `CLINE_API_KEY` as a fallback
 - `devin` — Devin session token from `/login devin` (the pi-devin extension); `DEVIN_API_KEY` as a token fallback and `DEVIN_API_SERVER_URL` as an endpoint override
 
 No additional setup is required - if Pi can use the provider, pi-quotas can check its quotas. For Synthetic, export `SYNTHETIC_API_KEY` in your shell or Pi environment.

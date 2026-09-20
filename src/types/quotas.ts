@@ -10,7 +10,8 @@ export type SupportedQuotaProvider =
   | "grok"
   | "antigravity"
   | "devin"
-  | "cursor";
+  | "cursor"
+  | "cline-pass";
 
 export type QuotasErrorKind =
   | "cancelled"

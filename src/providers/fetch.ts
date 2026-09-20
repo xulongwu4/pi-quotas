@@ -7,6 +7,7 @@ import type { QuotasErrorKind, QuotasResult, SupportedQuotaProvider } from "../t
 import {
   parseAnthropicUsage,
   parseAntigravityUsage,
+  parseClinePassUsage,
   parseCodexUsage,
   parseCursorUsage,
   parseDevinUsage,
@@ -870,6 +871,61 @@ export async function fetchCursorQuotas(
   );
 }
 
+const CLINE_API_BASE = "https://api.cline.bot/api/v1";
+
+export async function fetchClinePassQuotasWithToken(
+  apiKey: string | undefined,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  if (!apiKey) return failure("No Cline API key found (set CLINE_API_KEY)", "config");
+
+  const result = await fetchJson(
+    `${CLINE_API_BASE}/users/me/plan/usage-limits`,
+    { headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" } },
+    signal,
+  );
+  if (!result.ok) return failure(result.message, result.kind);
+
+  // The API can answer 200 with {success:false}; without this the missing
+  // payload would parse to zero windows and be reported as "no plan",
+  // hiding a real error behind a silently-rendered not_applicable.
+  if (result.data?.success === false) {
+    const detail = result.data?.error;
+    return failure(
+      typeof detail === "string" ? detail : (detail?.message ?? "Cline API request failed"),
+      "http",
+    );
+  }
+
+  const windows = parseClinePassUsage(result.data?.data);
+  // An account with no ClinePass plan gets an empty limits array rather than
+  // an error. That is the "credential has no subscription usage" case the
+  // Anthropic direct-API-key path uses, so report it the same way: the footer
+  // renders nothing instead of a dangling "No quota windows available".
+  if (windows.length === 0) {
+    return failure("No active ClinePass plan to report", "not_applicable");
+  }
+  return success("cline-pass", windows);
+}
+
+export async function fetchClinePassQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  const stored = (provider: string): string | undefined => {
+    const credential = authStorage.get(provider) as any;
+    const key = credential?.key ?? credential?.apiKey;
+    return typeof key === "string" && key.length > 0 ? key : undefined;
+  };
+  const apiKey =
+    (await providerAccessToken(authStorage, "cline-pass").catch(() => undefined)) ??
+    (await providerAccessToken(authStorage, "cline").catch(() => undefined)) ??
+    stored("cline-pass") ??
+    stored("cline") ??
+    process.env.CLINE_API_KEY;
+  return fetchClinePassQuotasWithToken(apiKey, signal);
+}
+
 /** Shared cancelled error shape, used by both the HTTP abort path and
  * superseded cache waiters so the copy cannot drift between them. */
 export function cancelledError(): { message: string; kind: "cancelled" } {
@@ -889,4 +945,5 @@ export const PROVIDER_FETCHERS = {
   antigravity: fetchAntigravityQuotas,
   devin: fetchDevinQuotas,
   cursor: fetchCursorQuotas,
+  "cline-pass": fetchClinePassQuotas,
 } as const;

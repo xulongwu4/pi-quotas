@@ -1156,3 +1156,47 @@ export function parseCursorUsage(data: any): QuotaWindow[] {
 
   return windows;
 }
+
+// ClinePass quotas. The web dashboard reads GET /users/me/plan/usage-limits,
+// which reports percentUsed + resetsAt for the three ClinePass windows; the
+// caps themselves ($1000/5h, $2500/7d, $5000/30d on the current plan) live in
+// /users/me/plan and are not needed once the percentage is served directly.
+const CLINE_WINDOWS: Array<{ type: string; label: string; windowSeconds: number }> = [
+  { type: "five_hour", label: "5h", windowSeconds: 5 * 60 * 60 },
+  { type: "weekly", label: "7d", windowSeconds: 7 * 24 * 60 * 60 },
+  { type: "monthly", label: "30d", windowSeconds: 30 * 24 * 60 * 60 },
+];
+
+export function parseClinePassUsage(data: any): QuotaWindow[] {
+  const limits = Array.isArray(data?.limits) ? data.limits : [];
+  const windows: QuotaWindow[] = [];
+
+  // Fixed order (5h, 7d, 30d) rather than response order, so the footer does
+  // not reshuffle if the API reorders its array.
+  for (const { type, label, windowSeconds } of CLINE_WINDOWS) {
+    const entry = limits.find((limit: any) => limit?.type === type);
+    if (!entry) continue;
+    const rawPercent = Number(entry.percentUsed);
+    if (!Number.isFinite(rawPercent)) continue;
+    // Clamped like every other percent producer here: an out-of-range value
+    // would otherwise reach the severity projection and the bar unclamped.
+    const usedPercent = Math.max(0, Math.min(100, rawPercent));
+    const resetsAt = parseDateish(entry.resetsAt);
+    windows.push({
+      provider: "cline-pass",
+      label,
+      resetsAt,
+      // A monthly window is a calendar month, not 30 days; derive it from the
+      // reset so pace and "resets in" read correctly near month boundaries.
+      windowSeconds: type === "monthly" && resetsAt ? monthWindowSeconds(resetsAt) : windowSeconds,
+      ...percentOnly(usedPercent),
+      showPace: false,
+      // At 100% ClinePass rejects requests with a 429 until the reset, so the
+      // window really is exhausted, not merely full.
+      limited: usedPercent >= 100,
+      nextLabel: usedPercent >= 100 ? "Limited" : "Resets",
+    });
+  }
+
+  return windows;
+}

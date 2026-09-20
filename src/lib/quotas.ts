@@ -15,6 +15,7 @@ export const SUPPORTED_PROVIDERS: SupportedQuotaProvider[] = [
   "antigravity",
   "devin",
   "cursor",
+  "cline-pass",
 ];
 
 export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
@@ -30,6 +31,7 @@ export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
   antigravity: "Antigravity",
   devin: "Devin",
   cursor: "Cursor",
+  "cline-pass": "ClinePass",
 };
 
 const DEFAULT_PROVIDER_TTL_MS = 60_000;
@@ -49,6 +51,7 @@ const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
   // planStatus; poll it less often than the small usage endpoints.
   devin: 5 * 60_000,
   cursor: DEFAULT_PROVIDER_TTL_MS,
+  "cline-pass": DEFAULT_PROVIDER_TTL_MS,
 };
 
 const ERROR_TTL_MS = 10_000;
@@ -116,6 +119,19 @@ export function normalizeQuotaProvider(
     provider.startsWith("opencode-go/")
   ) {
     return "opencode-go";
+  }
+  // Both Cline providers bill the same account, so the pay-as-you-go `cline`
+  // provider reports through the same quota windows.
+  if (
+    provider === "cline-pass" ||
+    provider.startsWith("cline-pass/") ||
+    provider === "clinepass" ||
+    provider === "cline" ||
+    provider.startsWith("cline/") ||
+    provider === "cline-free" ||
+    provider.startsWith("cline-free/")
+  ) {
+    return "cline-pass";
   }
   if (SUPPORTED_PROVIDERS.includes(provider as SupportedQuotaProvider)) {
     return provider as SupportedQuotaProvider;

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-09-20
+
+### Added
+- **ClinePass provider**: the 5-hour, weekly and monthly ClinePass utilization percentages and their reset times, surfaced in the dashboard, `/cline:quotas`, footer status, and quota warnings. Read from `GET /api/v1/users/me/plan/usage-limits` — the undocumented endpoint the Cline web dashboard itself uses — in a single request per refresh. Credentials come from the `cline-pass` (or `cline`) entry in `auth.json` written by the pi-cline-pass extension, falling back to `CLINE_API_KEY`; the `cline`, `cline-free` and `clinepass` provider ids all map to the same account. An account without a ClinePass plan returns an empty limits array and reports no windows rather than an error.
+
 ## [0.7.0] - 2026-09-17
 
 ### Added

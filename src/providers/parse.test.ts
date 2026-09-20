@@ -6,7 +6,7 @@ import { parseKimiCodingUsage } from "./providers.js";
 import { parseOpenRouterUsage } from "./providers.js";
 import { parseSyntheticUsage } from "./providers.js";
 import { parseZaiUsage } from "./providers.js";
-import { parseCursorUsage, parseDevinUsage } from "./providers.js";
+import { parseClinePassUsage, parseCursorUsage, parseDevinUsage } from "./providers.js";
 import { parseOpenCodeGoUsage } from "./providers.js";
 import { parseGrokUsage } from "./providers.js";
 import { parseAntigravityUsage } from "./providers.js";
@@ -1287,5 +1287,73 @@ describe("parseCursorUsage", () => {
     expect(parseCursorUsage(null)).toHaveLength(0);
     expect(parseCursorUsage({})).toHaveLength(0);
     expect(parseCursorUsage({ planUsage: {} })).toHaveLength(0);
+  });
+});
+
+describe("parseClinePassUsage", () => {
+  it("maps the three ClinePass windows in a fixed order", () => {
+    const windows = parseClinePassUsage({
+      limits: [
+        { type: "monthly", percentUsed: 50, resetsAt: "2026-10-14T15:06:19.150897072Z" },
+        { type: "five_hour", percentUsed: 0 },
+        { type: "weekly", percentUsed: 100, resetsAt: "2026-09-21T15:06:19.148984431Z" },
+      ],
+    });
+
+    expect(windows.map((w) => w.label)).toEqual(["5h", "7d", "30d"]);
+    expect(windows[0]).toMatchObject({
+      provider: "cline-pass",
+      kind: "percent",
+      usedPercent: 0,
+      resetsAt: null,
+      windowSeconds: 5 * 60 * 60,
+      nextLabel: "Resets",
+    });
+    expect(windows[1]).toMatchObject({
+      usedPercent: 100,
+      windowSeconds: 7 * 24 * 60 * 60,
+      // 100% means ClinePass is rejecting requests until the reset.
+      limited: true,
+      nextLabel: "Limited",
+    });
+    expect(windows[0]).toMatchObject({ limited: false, nextLabel: "Resets" });
+    expect(windows[1].resetsAt?.toISOString()).toBe("2026-09-21T15:06:19.148Z");
+    // Percent windows must not carry a synthetic used/limit pair.
+    expect(windows[1].usedValue).toBeUndefined();
+    expect(windows[1].limitValue).toBeUndefined();
+  });
+
+  it("derives the monthly window length from its reset instead of 30 days", () => {
+    const [monthly] = parseClinePassUsage({
+      // Midday so the length is identical in every timezone that
+      // monthWindowSeconds could localise the reset into.
+      limits: [{ type: "monthly", percentUsed: 12, resetsAt: "2026-02-01T12:00:00Z" }],
+    });
+
+    // January: 31 days, not the 30-day fallback.
+    expect(monthly.windowSeconds).toBe(31 * 24 * 60 * 60);
+  });
+
+  it("clamps percentages outside 0..100 and keeps a missing reset null", () => {
+    const windows = parseClinePassUsage({
+      limits: [
+        // five_hour carries no resetsAt until it has been used.
+        { type: "five_hour", percentUsed: -3 },
+        { type: "weekly", percentUsed: 137.5 },
+        { type: "monthly", percentUsed: 49.6 },
+      ],
+    });
+
+    expect(windows.map((w) => w.usedPercent)).toEqual([0, 100, 49.6]);
+    expect(windows[0].resetsAt).toBeNull();
+    // No reset means no pace to project against; the 30d fallback applies.
+    expect(windows[2].windowSeconds).toBe(30 * 24 * 60 * 60);
+  });
+
+  it("skips unknown, malformed and missing limits", () => {
+    expect(parseClinePassUsage(undefined)).toHaveLength(0);
+    expect(parseClinePassUsage({ limits: [] })).toHaveLength(0);
+    expect(parseClinePassUsage({ limits: [{ type: "yearly", percentUsed: 5 }] })).toHaveLength(0);
+    expect(parseClinePassUsage({ limits: [{ type: "weekly", percentUsed: "n/a" }] })).toHaveLength(0);
   });
 });

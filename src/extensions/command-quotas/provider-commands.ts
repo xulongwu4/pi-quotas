@@ -82,5 +82,11 @@ export function getProviderCommandInfo(
         commandName: "cursor:quotas",
         title: "Cursor Quotas",
       };
+    case "cline-pass":
+      return {
+        provider,
+        commandName: "cline:quotas",
+        title: "ClinePass Quotas",
+      };
   }
 }

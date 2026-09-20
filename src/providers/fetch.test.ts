@@ -2,6 +2,7 @@ import { AuthStorage } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAnthropicQuotasWithToken,
+  fetchClinePassQuotasWithToken,
   fetchAntigravityQuotas,
   fetchAntigravityQuotasWithToken,
   fetchCodexQuotasWithToken,
@@ -902,5 +903,93 @@ describe("fetchCursorQuotas", () => {
       success: false,
       error: { kind: "http" },
     });
+  });
+});
+
+describe("fetchClinePassQuotasWithToken", () => {
+  it("returns config error when the key is missing", async () => {
+    const result = await fetchClinePassQuotasWithToken(undefined);
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+  });
+
+  it("reads the ClinePass windows from a single usage-limits request", async () => {
+    let requestedUrl = "";
+    const spy = vi.fn(async (url: any) => {
+      requestedUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          data: {
+            limits: [
+              { type: "five_hour", percentUsed: 0 },
+              { type: "weekly", percentUsed: 100, resetsAt: "2026-09-21T15:06:19.148984431Z" },
+              { type: "monthly", percentUsed: 50, resetsAt: "2026-10-14T15:06:19.150897072Z" },
+            ],
+          },
+          success: true,
+        }),
+        { status: 200 },
+      );
+    });
+    globalThis.fetch = spy as any;
+
+    const result = await fetchClinePassQuotasWithToken(`live-key-${Date.now()}`);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(requestedUrl).toBe("https://api.cline.bot/api/v1/users/me/plan/usage-limits");
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("cline-pass");
+      expect(result.data.windows.map((w) => [w.label, w.usedPercent])).toEqual([
+        ["5h", 0],
+        ["7d", 100],
+        ["30d", 50],
+      ]);
+    }
+  });
+
+  it("reports not_applicable for an account without a ClinePass plan", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: { limits: [] }, success: true }), { status: 200 }),
+    ) as any;
+
+    const result = await fetchClinePassQuotasWithToken(`no-plan-${Date.now()}`);
+
+    // Rendered silently by the footer, unlike a real failure.
+    expect(result).toMatchObject({ success: false, error: { kind: "not_applicable" } });
+  });
+
+  it("surfaces a 200 response that carries success:false", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: false, error: "plan lookup failed" }), {
+          status: 200,
+        }),
+    ) as any;
+
+    const result = await fetchClinePassQuotasWithToken(`soft-error-${Date.now()}`);
+
+    // Must not be mistaken for "no ClinePass plan", which renders silently.
+    expect(result).toMatchObject({ success: false, error: { kind: "http" } });
+    if (!result.success) expect(result.error.message).toContain("plan lookup failed");
+  });
+
+  it("surfaces an auth failure", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
+    ) as any;
+
+    const result = await fetchClinePassQuotasWithToken(`bad-key-${Date.now()}`);
+
+    expect(result).toMatchObject({ success: false, error: { kind: "http" } });
+  });
+
+  it("surfaces a rate limit so the cache backs off", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify({ error: "slow down" }), { status: 429 }),
+    ) as any;
+
+    const result = await fetchClinePassQuotasWithToken(`limited-${Date.now()}`);
+
+    expect(result).toMatchObject({ success: false, error: { kind: "rate_limit" } });
   });
 });
