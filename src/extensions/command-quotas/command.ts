@@ -4,18 +4,18 @@ import {
   QUOTAS_EXTENSIONS_REQUEST_EVENT,
   configLoader,
 } from "../../config.js";
-import { quotaAuthStorage } from "../../lib/auth.js";
+import { trackMultiProvider } from "../../lib/multiprovider.js";
 import { formatQuotaDisplay } from "../../utils/quotas-format.js";
 import {
   fetchAllProviderQuotas,
-  fetchProviderQuotas,
+  fetchContextQuotas,
   SUPPORTED_PROVIDERS,
 } from "../../lib/quotas.js";
-import type { QuotasResult, SupportedQuotaProvider } from "../../types/quotas.js";
+import type { QuotaSnapshot } from "../../types/quotas.js";
 import { QuotasComponent } from "./components/quotas-display.js";
 import { getProviderCommandInfo } from "./provider-commands.js";
 
-type Snapshot = { provider: SupportedQuotaProvider; result: QuotasResult };
+type Snapshot = QuotaSnapshot;
 
 async function openQuotaView(
   title: string,
@@ -120,13 +120,15 @@ async function openQuotaView(
  * configured — the combined /quotas view hides it instead of listing an error
  * row. Single-provider commands still report it: the user asked by name.
  */
-export function isConfiguredSnapshot({ result }: Snapshot): boolean {
-  return result.success || result.error.kind !== "config";
+export function isConfiguredSnapshot({ result, accountId }: Snapshot): boolean {
+  // A pooled account is configured even when its credential fails to resolve.
+  return result.success || result.error.kind !== "config" || accountId !== undefined;
 }
 
 function formatSnapshotsForNotify(snapshots: Snapshot[]): string {
   const lines: string[] = [];
-  for (const { provider, result } of snapshots) {
+  for (const { provider: id, result, account } of snapshots) {
+    const provider = account ? `${id} (${account})` : id;
     if (!result.success) {
       if (result.error.kind === "not_applicable") continue;
       lines.push(`${provider}: ${result.error.message}`);
@@ -151,7 +153,7 @@ export function registerQuotasCommands(pi: ExtensionAPI): void {
       await openQuotaView(
         "Provider Quotas",
         (force, signal, onSnapshot) =>
-          fetchAllProviderQuotas(quotaAuthStorage(ctx.modelRegistry), {
+          fetchAllProviderQuotas(ctx, {
             force,
             signal,
             onSnapshot,
@@ -174,10 +176,7 @@ export function registerQuotasCommands(pi: ExtensionAPI): void {
         await openQuotaView(
           info.title,
           async (force, signal) => [
-            {
-              provider,
-              result: await fetchProviderQuotas(quotaAuthStorage(ctx.modelRegistry), provider, { force, signal }),
-            },
+            await fetchContextQuotas(ctx, provider, { force, signal }),
           ],
           ctx,
         );
@@ -188,6 +187,7 @@ export function registerQuotasCommands(pi: ExtensionAPI): void {
 
 export default async function (pi: ExtensionAPI) {
   await configLoader.load();
+  trackMultiProvider(pi);
 
   const config = configLoader.getConfig();
   if (config.quotasCommand || config.providerCommands) {

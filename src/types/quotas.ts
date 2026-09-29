@@ -34,6 +34,15 @@ export type QuotasResult =
     }
   | { success: false; error: { message: string; kind: QuotasErrorKind } };
 
+export type QuotaSnapshot = {
+  provider: SupportedQuotaProvider;
+  result: QuotasResult;
+  /** pi-multiprovider account label, when the session uses a pooled account. */
+  account?: string;
+  /** Stable pi-multiprovider account id (labels may repeat or change). */
+  accountId?: string;
+};
+
 /** How a quota window's value is expressed. */
 export type QuotaWindowKind =
   | "percent" // e.g. Anthropic 5h: usedPercent only

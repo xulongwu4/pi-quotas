@@ -21,6 +21,7 @@ import {
 } from "./providers.js";
 import { resolveOpenCodeGoConfigCached } from "./opencode-go-config.js";
 import { queryOpenCodeGoQuota } from "./opencode-go.js";
+import { isAccountScoped } from "../lib/multiprovider.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const COPILOT_VERSION = "0.35.0";
@@ -55,6 +56,8 @@ function isDirectAnthropicApiKey(token: string): boolean {
 function codexAccountId(authStorage: AuthStorage): string | undefined {
   const credential = authStorage.get("openai-codex") as any;
   if (typeof credential?.accountId === "string") return credential.accountId;
+  // ~/.codex belongs to whichever account the Codex CLI logged in.
+  if (isAccountScoped(authStorage)) return undefined;
   try {
     const authPath = join(homedir(), ".codex", "auth.json");
     const data = JSON.parse(readFileSync(authPath, "utf8")) as any;
@@ -427,12 +430,16 @@ export async function fetchOpenCodeGoQuotas(
     (await providerAccessToken(authStorage, "opencode-go")) ??
     (await providerAccessToken(authStorage, "opencode"));
 
-  const envApiKey =
-    process.env.OPENCODE_API_KEY ?? process.env.OPENCODE_GO_API_KEY;
+  // A pooled account uses only its own key: env keys, the auth cookie and
+  // workspace config may belong to another account.
+  const scoped = isAccountScoped(authStorage);
+  const envApiKey = scoped
+    ? undefined
+    : process.env.OPENCODE_API_KEY ?? process.env.OPENCODE_GO_API_KEY;
 
-  const configResult = await resolveOpenCodeGoConfigCached();
+  const configResult = scoped ? undefined : await resolveOpenCodeGoConfigCached();
   const config =
-    configResult.state === "configured" ? configResult.config : {};
+    configResult?.state === "configured" ? configResult.config : {};
 
   const apiKey = storedApiKey ?? envApiKey ?? config.apiKey;
   const authCookie = config.authCookie;
@@ -867,7 +874,8 @@ export async function fetchCursorQuotas(
   return fetchCursorQuotasWithToken(
     cursorStoredAccessToken(authStorage) ?? process.env.CURSOR_ACCESS_TOKEN,
     signal,
-    process.env.CURSOR_USAGE_SESSION_TOKEN,
+    // The dashboard cookie may belong to another account than a pooled one.
+    isAccountScoped(authStorage) ? undefined : process.env.CURSOR_USAGE_SESSION_TOKEN,
   );
 }
 

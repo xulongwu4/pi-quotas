@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-09-29
+
+### Added
+- **pi-multiprovider account support**: when pi-multiprovider pools several accounts for a provider, quotas are fetched with the credential of the account the session is using (via pi-multiprovider's `pi-multiprovider:service` announcement; no dependency added) and the account label is shown in the footer, `/quotas`, provider commands, and quota warnings. Results and warning state are keyed by Pi provider id plus account id, and the footer repaints on `/switch-account` or a restored pin. Falls back to Pi's own credential when pi-multiprovider is absent or no account has been selected yet. A pooled account never borrows ambient credentials: it skips the `~/.codex` account id, the Cursor dashboard cookie, and OpenCode Go env keys/cookies/config, and an account whose credential cannot be resolved reports an error. Pooled GitHub Copilot and Synthetic accounts report per-account quotas as unavailable, since those fetchers cannot use the pooled token.
+
 ## [0.8.0] - 2026-09-20
 
 ### Added

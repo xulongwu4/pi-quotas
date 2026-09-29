@@ -9,10 +9,10 @@ import {
   type QuotasConfigUpdatedPayload,
   configLoader,
 } from "../../config.js";
-import { quotaAuthStorage } from "../../lib/auth.js";
+import { trackMultiProvider } from "../../lib/multiprovider.js";
 import {
-  fetchProviderQuotas,
-  isSupportedProvider,
+  fetchContextQuotas,
+  normalizeQuotaProvider,
   PROVIDER_LABELS,
 } from "../../lib/quotas.js";
 import { formatQuotaUsage } from "../../utils/quotas-format.js";
@@ -52,20 +52,20 @@ function clearAlertState(): void {
 
 export default async function (pi: ExtensionAPI) {
   await configLoader.load();
+  trackMultiProvider(pi);
   let enabled = configLoader.getConfig().quotaWarnings;
   let currentContext: ExtensionContext | undefined;
   async function check(ctx: ExtensionContext, onlyNew: boolean): Promise<void> {
-    const provider = ctx.model?.provider;
-    if (!ctx.hasUI || !provider || !isSupportedProvider(provider)) return;
+    const provider = normalizeQuotaProvider(ctx.model?.provider);
+    if (!ctx.hasUI || !provider) return;
     const now = Date.now();
     if (onlyNew && now - lastFetchAt < MIN_FETCH_INTERVAL_MS) return;
     lastFetchAt = now;
 
-    const result = await fetchProviderQuotas(
-      quotaAuthStorage(ctx.modelRegistry),
-      provider,
-    );
+    const { result, account, accountId } = await fetchContextQuotas(ctx, provider);
     if (!result.success) return;
+    // Alert state is per account: another account's windows are fresh news.
+    const scope = accountId ? `${provider}@${accountId}` : provider;
 
     const risky = result.data.windows
       .map((window) => ({ window, assessment: assessWindow(window) }))
@@ -75,7 +75,7 @@ export default async function (pi: ExtensionAPI) {
     const toNotify = onlyNew
       ? risky.filter((entry) =>
         shouldNotify(
-          `${provider}:${entry.window.label}`,
+          `${scope}:${entry.window.label}`,
           entry.assessment.severity,
         ),
       )
@@ -84,12 +84,12 @@ export default async function (pi: ExtensionAPI) {
 
     for (const entry of toNotify) {
       markNotified(
-        `${provider}:${entry.window.label}`,
+        `${scope}:${entry.window.label}`,
         entry.assessment.severity,
       );
     }
 
-    const providerName = PROVIDER_LABELS[provider];
+    const providerName = account ? `${PROVIDER_LABELS[provider]} (${account})` : PROVIDER_LABELS[provider];
 
     const lines = toNotify.map(({ window, assessment }) => {
       const projected = Math.round(assessment.projectedPercent);

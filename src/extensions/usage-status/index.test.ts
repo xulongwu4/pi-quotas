@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import usageStatusExtension from "./index.js";
-import { fetchProviderQuotas } from "../../lib/quotas.js";
+import { fetchContextQuotas } from "../../lib/quotas.js";
 
 vi.mock("../../config.js", () => ({
   QUOTAS_CONFIG_UPDATED_EVENT: "quotas:config:updated",
@@ -22,9 +22,11 @@ vi.mock("../../config.js", () => ({
 
 vi.mock("../../lib/quotas.js", () => ({
   isSupportedProvider: (provider: string | undefined) => provider === "anthropic",
-  fetchProviderQuotas: vi.fn(async () => ({
-    success: true,
-    data: { provider: "anthropic", windows: [] },
+  normalizeQuotaProvider: (provider: string | undefined) =>
+    provider === "anthropic" ? provider : undefined,
+  fetchContextQuotas: vi.fn(async () => ({
+    provider: "anthropic",
+    result: { success: true, data: { provider: "anthropic", windows: [] } },
   })),
 }));
 
@@ -161,9 +163,12 @@ describe("usage-status extension lifecycle", () => {
 
   it("clears the footer silently for not_applicable credentials instead of warning", async () => {
     vi.useFakeTimers();
-    vi.mocked(fetchProviderQuotas).mockResolvedValueOnce({
-      success: false,
-      error: { kind: "not_applicable", message: "Direct API key" },
+    vi.mocked(fetchContextQuotas).mockResolvedValueOnce({
+      provider: "anthropic",
+      result: {
+        success: false,
+        error: { kind: "not_applicable", message: "Direct API key" },
+      },
     } as any);
 
     const { pi, emitExtensionEvent } = createFakePi();

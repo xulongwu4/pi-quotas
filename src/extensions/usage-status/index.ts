@@ -15,10 +15,11 @@ const SYNTHETIC_EXTENSIONS_REGISTER_EVENT = "synthetic:extensions:register";
 interface SyntheticExtensionsRegisterPayload {
   feature: string;
 }
-import { quotaAuthStorage } from "../../lib/auth.js";
+import { trackMultiProvider } from "../../lib/multiprovider.js";
 import {
-  fetchProviderQuotas,
+  fetchContextQuotas,
   isSupportedProvider,
+  normalizeQuotaProvider,
 } from "../../lib/quotas.js";
 import {
   assessWindow,
@@ -113,16 +114,19 @@ export function toStatusWindows(windows: QuotaWindow[]): WindowStatus[] {
 export function formatStatusForFooter(
   ctx: Pick<ExtensionContext, "ui">,
   windows: WindowStatus[],
+  /** pi-multiprovider account label shown before the lanes. */
+  account?: string,
 ): string | undefined {
   if (windows.length === 0) return undefined;
-  return formatStatus(ctx, windows);
+  const status = formatStatus(ctx, windows);
+  return account ? `${ctx.ui.theme.fg("dim", account)} ${status}` : status;
 }
 
 function createStatusRefresher() {
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let activeContext: ExtensionContext | undefined;
   let activeProvider: string | undefined;
-  let lastStatus: WindowStatus[] | undefined;
+  let lastStatus: { windows: WindowStatus[]; account?: string } | undefined;
   // Serialize updates so refreshFor awaits its own provider refresh instead
   // of returning early behind an older in-flight request.
   let updateTail: Promise<void> = Promise.resolve();
@@ -172,9 +176,9 @@ function createStatusRefresher() {
     const controller = new AbortController();
     fetchController = controller;
     try {
-      const result = await fetchProviderQuotas(
-        quotaAuthStorage(ctx.modelRegistry),
-        provider,
+      const { result, account } = await fetchContextQuotas(
+        ctx,
+        normalizeQuotaProvider(provider)!,
         { signal: controller.signal },
       );
       if (
@@ -201,8 +205,8 @@ function createStatusRefresher() {
         return;
       }
       const windows: WindowStatus[] = toStatusWindows(result.data.windows);
-      const status = formatStatusForFooter(ctx, windows);
-      lastStatus = status === undefined ? undefined : windows;
+      const status = formatStatusForFooter(ctx, windows, account);
+      lastStatus = status === undefined ? undefined : { windows, account };
       setStatusSafely(ctx, status);
     } catch (error) {
       if (isStaleContextError(error)) {
@@ -248,7 +252,7 @@ function createStatusRefresher() {
       // If switching models within the same provider, keep rendering the existing
       // status while the background quota refresh runs to avoid flickering/disappearing.
       if (prevProvider === activeProvider && lastStatus) {
-        setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus ?? []));
+        setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus?.windows ?? [], lastStatus?.account));
       }
       await update(ctx, requestGeneration);
     },
@@ -265,7 +269,7 @@ function createStatusRefresher() {
     },
     renderLast(ctx: ExtensionContext): boolean {
       if (!lastStatus) return false;
-      return setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus ?? []));
+      return setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus?.windows ?? [], lastStatus?.account));
     },
   };
 }
@@ -320,6 +324,15 @@ export default async function (pi: ExtensionAPI) {
   function shouldDeferToSynthetic(provider: string | undefined): boolean {
     return deferToSynthetic && syntheticUsageActive && provider === "synthetic";
   }
+
+  // Repaint when pi-multiprovider appears or the session's account changes
+  // (/switch-account, or a pin restored after our session_start ran).
+  unsubscribeEventBusListeners.push(trackMultiProvider(pi, (ctx) => {
+    if (ctx) currentContext = ctx;
+    if (!enabled || !currentContext) return;
+    if (shouldDeferToSynthetic(getContextProvider(currentContext))) return;
+    scheduleRefresh(currentContext);
+  }));
 
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;

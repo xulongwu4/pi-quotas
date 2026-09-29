@@ -120,6 +120,10 @@ pi-quotas reads existing Pi auth entries from `~/.pi/agent/auth.json`:
 
 No additional setup is required - if Pi can use the provider, pi-quotas can check its quotas. For Synthetic, export `SYNTHETIC_API_KEY` in your shell or Pi environment.
 
+### Multiple accounts (pi-multiprovider)
+
+With [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) pooling several accounts for a provider, quotas follow the account the session is actually using (the `/switch-account` pin, or the pool's session-affinity pick after the first request). The account label is shown in the footer, next to the provider in `/quotas`, and in quota warnings. Until the pool has picked an account, pi-quotas reports Pi's own `/login` credential as before. Pooled GitHub Copilot and Synthetic accounts are not supported: their quota endpoints need credentials pi-multiprovider does not expose.
+
 ## Requirements
 
 - [Pi](https://github.com/mariozechner/pi) >= 0.61.0

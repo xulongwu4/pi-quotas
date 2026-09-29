@@ -14,6 +14,15 @@ describe("isConfiguredSnapshot", () => {
     ).toBe(false);
   });
 
+  it("keeps pooled accounts whose credentials failed to resolve", () => {
+    expect(
+      isConfiguredSnapshot({
+        ...snap({ success: false, error: { kind: "config", message: "no token" } }),
+        accountId: "grok:work",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps configured providers, including failures and not_applicable", () => {
     expect(
       isConfiguredSnapshot(

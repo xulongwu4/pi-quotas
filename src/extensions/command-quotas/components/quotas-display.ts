@@ -5,17 +5,14 @@ import { Loader, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 import pkg from "../../../../package.json" with { type: "json" };
 import { PROVIDER_LABELS } from "../../../lib/quotas.js";
 import { formatQuotaDisplay } from "../../../utils/quotas-format.js";
-import type { QuotasResult, SupportedQuotaProvider } from "../../../types/quotas.js";
+import type { QuotaSnapshot } from "../../../types/quotas.js";
 import {
   assessWindow,
   formatResetTiming,
   getSeverityColor,
 } from "../../../utils/quotas-severity.js";
 
-type Snapshot = {
-  provider: SupportedQuotaProvider;
-  result: QuotasResult;
-};
+type Snapshot = QuotaSnapshot;
 
 type QuotasState =
   | { type: "loading" }
@@ -166,8 +163,9 @@ export class QuotasComponent implements Component {
 
   private renderProvider(snapshot: Snapshot, maxWidth: number): string[] {
     const lines: string[] = [];
-    const title = PROVIDER_LABELS[snapshot.provider];
-    lines.push(truncateToWidth(`  ${this.theme.fg("accent", title)}`, maxWidth));
+    const title = this.theme.fg("accent", PROVIDER_LABELS[snapshot.provider]);
+    const account = snapshot.account ? this.theme.fg("dim", ` · ${snapshot.account}`) : "";
+    lines.push(truncateToWidth(`  ${title}${account}`, maxWidth));
 
     if (!snapshot.result.success) {
       // "not applicable" is an expected, non-error state (e.g. a direct
