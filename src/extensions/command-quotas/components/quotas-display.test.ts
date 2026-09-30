@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import pkg from "../../../../package.json" with { type: "json" };
+import type { QuotaSnapshot } from "../../../types/quotas.js";
 import { QuotasComponent } from "./quotas-display.js";
 
 const ansi = {
@@ -194,5 +195,21 @@ describe("QuotasComponent", () => {
     expect(output).not.toContain("\x1b[33m");
     expect(output).not.toContain("usage unavailable");
     expect(output).not.toContain("{");
+  });
+
+  it("updates the account heading when a single-provider view is refreshed", () => {
+    const snapshot = (account: string): QuotaSnapshot => ({
+      provider: "anthropic",
+      account,
+      accountId: `anthropic:${account}`,
+      result: { success: true, data: { provider: "anthropic", windows: [] } },
+    });
+    const component = makeComponent();
+    component.setState({ type: "loaded", snapshots: [snapshot("Work")] });
+    expect(component.render(80).join("\n")).toContain("Work");
+    component.setState({ type: "loaded", snapshots: [snapshot("Home")] });
+    const output = component.render(80).join("\n");
+    expect(output).toContain("Home");
+    expect(output).not.toContain("Work");
   });
 });

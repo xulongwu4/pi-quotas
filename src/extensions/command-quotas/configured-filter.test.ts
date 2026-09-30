@@ -35,4 +35,10 @@ describe("isConfiguredSnapshot", () => {
       ).toBe(true);
     }
   });
+
+  it.each(["account_unknown", "account_pending"] as const)("hides %s providers from the combined dashboard", (kind) => {
+    expect(isConfiguredSnapshot(snap({
+      success: false, error: { kind, message: "Unknown selection" },
+    }))).toBe(false);
+  });
 });

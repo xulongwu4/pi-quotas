@@ -121,8 +121,10 @@ async function openQuotaView(
  * row. Single-provider commands still report it: the user asked by name.
  */
 export function isConfiguredSnapshot({ result, accountId }: Snapshot): boolean {
-  // A pooled account is configured even when its credential fails to resolve.
-  return result.success || result.error.kind !== "config" || accountId !== undefined;
+  // A known account is configured even when its credential fails to resolve.
+  // An ambiguous service result does not prove this provider is configured.
+  return result.success || accountId !== undefined ||
+    (result.error.kind !== "config" && result.error.kind !== "account_unknown" && result.error.kind !== "account_pending");
 }
 
 function formatSnapshotsForNotify(snapshots: Snapshot[]): string {
@@ -187,7 +189,8 @@ export function registerQuotasCommands(pi: ExtensionAPI): void {
 
 export default async function (pi: ExtensionAPI) {
   await configLoader.load();
-  trackMultiProvider(pi);
+  const stopTracking = trackMultiProvider(pi);
+  pi.on("session_shutdown", () => stopTracking());
 
   const config = configLoader.getConfig();
   if (config.quotasCommand || config.providerCommands) {

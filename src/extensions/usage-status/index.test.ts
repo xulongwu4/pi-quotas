@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { quotaAccount, setMultiProviderService } from "../../lib/multiprovider.js";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import usageStatusExtension from "./index.js";
 import { fetchContextQuotas } from "../../lib/quotas.js";
@@ -79,7 +80,7 @@ function createFakePi() {
 
 function createContext(provider: string) {
   let stale = false;
-  const setStatus = vi.fn(() => {
+  const setStatus = vi.fn((_key: string, _text: string | undefined) => {
     if (stale) throw new Error(STALE_CONTEXT_ERROR);
   });
 
@@ -108,7 +109,14 @@ function createContext(provider: string) {
   };
 }
 
+beforeEach(() => {
+  vi.mocked(fetchContextQuotas).mockReset().mockResolvedValue({
+    provider: "anthropic",
+    result: { success: true, data: { provider: "anthropic", windows: [] } },
+  });
+});
 afterEach(() => {
+  setMultiProviderService(undefined);
   vi.useRealTimers();
   vi.clearAllMocks();
 });
@@ -126,6 +134,7 @@ describe("usage-status extension lifecycle", () => {
 
     expect(() => vi.advanceTimersByTime(60_000)).not.toThrow();
     await vi.runOnlyPendingTimersAsync();
+    await emitExtensionEvent("session_shutdown", ctx);
   });
 
   it("does not throw when event-bus callbacks see a stale session context", async () => {
@@ -143,6 +152,7 @@ describe("usage-status extension lifecycle", () => {
         config: { usageStatus: true, deferToSynthetic: true },
       });
     }).not.toThrow();
+    await emitExtensionEvent("session_shutdown", ctx);
   });
 
   it("unsubscribes event-bus listeners during session shutdown", async () => {
@@ -183,5 +193,170 @@ describe("usage-status extension lifecycle", () => {
     const last = calls[calls.length - 1]?.[1];
     expect(last).toBeUndefined();
     expect(calls.some((c) => c[1] === "usage unavailable")).toBe(false);
+    await emitExtensionEvent("session_shutdown", ctx);
+  });
+
+  it.each(["config", "not_applicable"] as const)("shows the account when pooled quotas are %s", async (kind) => {
+    vi.useFakeTimers();
+    vi.mocked(fetchContextQuotas).mockResolvedValueOnce({
+      provider: "anthropic",
+      account: "Work",
+      accountId: "anthropic:work",
+      result: { success: false, error: { kind, message: "Unavailable" } },
+    });
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx, setStatus } = createContext("anthropic");
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setStatus).toHaveBeenLastCalledWith("pi-quotas-usage", "Work · usage unavailable");
+    await emitExtensionEvent("session_shutdown", ctx);
+  });
+
+  it("clears old account quotas and aborts pending refreshes when the service changes", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchContextQuotas).mockResolvedValueOnce({
+      provider: "anthropic",
+      account: "Work",
+      accountId: "anthropic:work",
+      result: { success: true, data: { provider: "anthropic", windows: [] } },
+    });
+    const { pi, emitExtensionEvent, emitBusEvent } = createFakePi();
+    const { ctx, setStatus } = createContext("anthropic");
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    let signal: AbortSignal | undefined;
+    vi.mocked(fetchContextQuotas).mockImplementationOnce((_ctx, _provider, options) =>
+      new Promise(resolve => {
+        signal = options?.signal;
+        signal?.addEventListener("abort", () => resolve({
+          provider: "anthropic",
+          result: { success: false, error: { kind: "cancelled", message: "Cancelled" } },
+        }));
+      }),
+    );
+    await emitExtensionEvent("turn_end", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    emitBusEvent("pi-multiprovider:service", {
+      getActiveAccount: async () => undefined,
+      resolveActiveAccountAuth: async () => undefined,
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(setStatus).toHaveBeenLastCalledWith("pi-quotas-usage", undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    await emitExtensionEvent("session_shutdown", ctx);
+  });
+
+  it("explains an unknown account without displaying default quotas", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchContextQuotas).mockResolvedValueOnce({
+      provider: "anthropic",
+      result: { success: false, error: { kind: "account_unknown", message: "Select an account" } },
+    });
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx, setStatus } = createContext("anthropic");
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setStatus).toHaveBeenLastCalledWith("pi-quotas-usage", "account unknown · see README");
+    await emitExtensionEvent("session_shutdown", ctx);
+  });
+
+  it("uses the switch event context and ignores switches for other providers", async () => {
+    vi.useFakeTimers();
+    const { pi, emitExtensionEvent, emitBusEvent } = createFakePi();
+    const original = createContext("anthropic");
+    const replacement = createContext("anthropic");
+    const callbacks = new Map<string, (event: { ctx?: ExtensionContext }) => void>();
+    const service = {
+      getActiveAccount: async () => undefined,
+      resolveActiveAccountAuth: async () => undefined,
+      onActiveAccountChanged: (id: string, cb: (event: { ctx?: ExtensionContext }) => void) => {
+        callbacks.set(id, cb);
+        return () => callbacks.delete(id);
+      },
+    };
+    vi.mocked(fetchContextQuotas).mockImplementation(async (context) => {
+      // Start following both providers through the real service bridge.
+      await quotaAccount(context, ["anthropic", "devin"], {} as never);
+      return { provider: "anthropic", result: { success: true, data: { provider: "anthropic", windows: [] } } };
+    });
+    await usageStatusExtension(pi);
+    emitBusEvent("pi-multiprovider:service", service);
+    await emitExtensionEvent("session_start", original.ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    vi.mocked(fetchContextQuotas).mockClear();
+    callbacks.get("devin")?.({ ctx: replacement.ctx });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchContextQuotas).not.toHaveBeenCalled();
+    callbacks.get("anthropic")?.({ ctx: replacement.ctx });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchContextQuotas).toHaveBeenCalledWith(replacement.ctx, "anthropic", expect.anything());
+    await emitExtensionEvent("session_shutdown", replacement.ctx);
+  });
+
+  it("hides not-applicable upstream quotas but refreshes on same-object announcements", async () => {
+    vi.useFakeTimers();
+    const { pi, emitExtensionEvent, emitBusEvent } = createFakePi();
+    const { ctx, setStatus } = createContext("anthropic");
+    const service = { getActiveAccount: async () => undefined, resolveActiveAccountAuth: async () => undefined };
+    vi.mocked(fetchContextQuotas).mockResolvedValue({
+      provider: "anthropic", account: "Pi default", accountId: "anthropic:pi:default",
+      result: { success: false, error: { kind: "not_applicable", message: "API key" } },
+    });
+    await usageStatusExtension(pi);
+    emitBusEvent("pi-multiprovider:service", service);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setStatus).toHaveBeenLastCalledWith("pi-quotas-usage", undefined);
+    vi.mocked(fetchContextQuotas).mockClear();
+    emitBusEvent("pi-multiprovider:service", service);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchContextQuotas).toHaveBeenCalledTimes(1);
+    await emitExtensionEvent("session_shutdown", ctx);
+  });
+
+  it.each([true, false])("keeps a stable footer across reconciliation (pooled=%s), but clears a lost selection", async (pooled) => {
+    vi.useFakeTimers();
+    const { pi, emitExtensionEvent, emitBusEvent } = createFakePi();
+    const { ctx, setStatus } = createContext("anthropic");
+    const service = { getActiveAccount: async () => undefined, resolveActiveAccountAuth: async () => undefined };
+    const ready = {
+      provider: "anthropic" as const,
+      account: pooled ? "Work" : undefined, accountId: pooled ? "anthropic:work" : undefined,
+      result: { success: true as const, data: { provider: "anthropic" as const, windows: [{
+        provider: "anthropic" as const, kind: "percent" as const, label: "5h", usedPercent: 96,
+        resetsAt: null, windowSeconds: 18000,
+      }] } },
+    };
+    vi.mocked(fetchContextQuotas).mockResolvedValue(ready);
+    await usageStatusExtension(pi);
+    emitBusEvent("pi-multiprovider:service", service);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    const painted = setStatus.mock.calls.at(-1)?.[1];
+    expect(painted).toBeTruthy();
+    setStatus.mockClear();
+    for (let i = 0; i < 3; i++) {
+      vi.mocked(fetchContextQuotas).mockResolvedValue({
+        provider: "anthropic",
+        result: { success: false, error: { kind: "account_pending", message: "Reconciling" } },
+      });
+      emitBusEvent("pi-multiprovider:service", service);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.mocked(fetchContextQuotas).mockResolvedValue(ready);
+      emitBusEvent("pi-multiprovider:service", service);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(setStatus.mock.calls.every(call => call[1] === painted)).toBe(true);
+    vi.mocked(fetchContextQuotas).mockResolvedValue({
+      provider: "anthropic",
+      result: { success: false, error: { kind: "account_unknown", message: "No selection" } },
+    });
+    emitBusEvent("pi-multiprovider:service", service);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setStatus).toHaveBeenLastCalledWith("pi-quotas-usage", "account unknown · see README");
+    await emitExtensionEvent("session_shutdown", ctx);
   });
 });

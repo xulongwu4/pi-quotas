@@ -117,7 +117,7 @@ export function formatStatusForFooter(
   /** pi-multiprovider account label shown before the lanes. */
   account?: string,
 ): string | undefined {
-  if (windows.length === 0) return undefined;
+  if (windows.length === 0) return account ? ctx.ui.theme.fg("dim", `${account} · no quota windows`) : undefined;
   const status = formatStatus(ctx, windows);
   return account ? `${ctx.ui.theme.fg("dim", account)} ${status}` : status;
 }
@@ -176,7 +176,7 @@ function createStatusRefresher() {
     const controller = new AbortController();
     fetchController = controller;
     try {
-      const { result, account } = await fetchContextQuotas(
+      const { result, account, accountId } = await fetchContextQuotas(
         ctx,
         normalizeQuotaProvider(provider)!,
         { signal: controller.signal },
@@ -192,15 +192,22 @@ function createStatusRefresher() {
         // Shared-cache eviction can cancel the provider request without
         // aborting this UI controller; cancellation is normal control flow.
         if (result.error.kind === "cancelled") return;
+        if (result.error.kind === "account_pending") return; // keep the last paint during reconciliation
         // A "not applicable" result (e.g. a direct Anthropic API key with no
         // OAuth subscription usage) is expected, not a failure — show nothing
         // rather than a persistent "usage unavailable" warning.
-        if (result.error.kind === "not_applicable") {
+        lastStatus = undefined;
+        if (result.error.kind === "not_applicable" && (!account || accountId?.endsWith(":pi:default"))) {
           setStatusSafely(ctx, undefined);
           return;
         }
         setStatusSafely(ctx, (ctx) =>
-          ctx.ui.theme.fg("warning", "usage unavailable"),
+          ctx.ui.theme.fg(
+            result.error.kind === "not_applicable" ? "dim" : "warning",
+            result.error.kind === "account_unknown"
+              ? "account unknown · see README"
+              : account ? `${account} · usage unavailable` : "usage unavailable",
+          ),
         );
         return;
       }
@@ -242,7 +249,11 @@ function createStatusRefresher() {
       activeProvider = getContextProvider(ctx, providerOverride);
       // Abort the previous provider's in-flight fetch so a provider switch
       // is not stalled on it (e.g. leaving a slow Devin GetUserStatus).
-      if (prevProvider !== activeProvider) fetchController?.abort();
+      if (prevProvider !== activeProvider) {
+        fetchController?.abort();
+        lastStatus = undefined;
+        setStatusSafely(ctx, undefined);
+      }
       generation++;
       const requestGeneration = generation;
       if (!activeProvider || !isSupportedProvider(activeProvider)) {
@@ -327,10 +338,20 @@ export default async function (pi: ExtensionAPI) {
 
   // Repaint when pi-multiprovider appears or the session's account changes
   // (/switch-account, or a pin restored after our session_start ran).
-  unsubscribeEventBusListeners.push(trackMultiProvider(pi, (ctx) => {
+  unsubscribeEventBusListeners.push(trackMultiProvider(pi, (ctx, changedProvider, replaced) => {
+    const nextContext = ctx ?? currentContext;
+    if (!nextContext) return;
+    const provider = getContextProvider(nextContext);
+    if (changedProvider && normalizeQuotaProvider(changedProvider) !== normalizeQuotaProvider(provider)) return;
     if (ctx) currentContext = ctx;
     if (!enabled || !currentContext) return;
-    if (shouldDeferToSynthetic(getContextProvider(currentContext))) return;
+    if (shouldDeferToSynthetic(provider)) return;
+    // Reconciliation is routine; only a replaced service or explicit switch
+    // invalidates the current paint while its replacement loads.
+    if (changedProvider || replaced) {
+      refresher.stop(currentContext);
+      refresher.start();
+    }
     scheduleRefresh(currentContext);
   }));
 

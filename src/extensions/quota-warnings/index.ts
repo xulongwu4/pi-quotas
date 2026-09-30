@@ -52,20 +52,37 @@ function clearAlertState(): void {
 
 export default async function (pi: ExtensionAPI) {
   await configLoader.load();
-  trackMultiProvider(pi);
   let enabled = configLoader.getConfig().quotaWarnings;
   let currentContext: ExtensionContext | undefined;
+  let controller: AbortController | undefined;
+  let needsRefresh = true;
+  const stopTracking = trackMultiProvider(pi, (ctx, changedProvider, replaced) => {
+    const next = ctx ?? currentContext;
+    if (!next || !enabled) return;
+    if (changedProvider && normalizeQuotaProvider(changedProvider) !== normalizeQuotaProvider(next.model?.provider)) return;
+    currentContext = next;
+    controller?.abort();
+    if (changedProvider || replaced || needsRefresh) lastFetchAt = -Infinity;
+    scheduleCheck(next, true);
+  });
   async function check(ctx: ExtensionContext, onlyNew: boolean): Promise<void> {
     const provider = normalizeQuotaProvider(ctx.model?.provider);
     if (!ctx.hasUI || !provider) return;
     const now = Date.now();
     if (onlyNew && now - lastFetchAt < MIN_FETCH_INTERVAL_MS) return;
     lastFetchAt = now;
+    needsRefresh = true;
 
-    const { result, account, accountId } = await fetchContextQuotas(ctx, provider);
+    controller?.abort();
+    const pending = new AbortController();
+    controller = pending;
+    const { result, account, accountId } = await fetchContextQuotas(ctx, provider, { signal: pending.signal });
+    if (pending.signal.aborted || currentContext !== ctx || !enabled) return;
+    needsRefresh = !result.success && (result.error.kind === "account_unknown" || result.error.kind === "account_pending");
     if (!result.success) return;
     // Alert state is per account: another account's windows are fresh news.
-    const scope = accountId ? `${provider}@${accountId}` : provider;
+    const identity = accountId ?? `${ctx.model?.provider ?? provider}:pi:default`;
+    const scope = `${provider}@${identity}`;
 
     const risky = result.data.windows
       .map((window) => ({ window, assessment: assessWindow(window) }))
@@ -120,6 +137,7 @@ export default async function (pi: ExtensionAPI) {
   pi.events.on(QUOTAS_CONFIG_UPDATED_EVENT, (data: unknown) => {
     enabled = (data as QuotasConfigUpdatedPayload).config.quotaWarnings;
     if (!enabled) {
+      controller?.abort();
       clearAlertState();
       return;
     }
@@ -144,11 +162,14 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("model_select", async (_event, ctx) => {
     currentContext = ctx;
+    controller?.abort();
     clearAlertState();
   });
 
   pi.on("session_shutdown", async () => {
     currentContext = undefined;
+    controller?.abort();
+    stopTracking();
     clearAlertState();
   });
 
