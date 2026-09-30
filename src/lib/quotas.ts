@@ -1,8 +1,9 @@
+import { stripVTControlCharacters } from "node:util";
 import type { AuthStorage } from "@mariozechner/pi-coding-agent";
 import { cancelledError, PROVIDER_FETCHERS } from "../providers/fetch.js";
 import type { QuotaSnapshot, QuotasResult, SupportedQuotaProvider } from "../types/quotas.js";
 import { quotaAuthStorage } from "./auth.js";
-import { quotaAccount, type AccountContext } from "./multiprovider.js";
+import { ACCOUNT_SELECTION_CHANGED, ACCOUNT_SERVICE_PENDING, quotaAccount, type AccountContext } from "./multiprovider.js";
 
 export const SUPPORTED_PROVIDERS: SupportedQuotaProvider[] = [
   "anthropic",
@@ -72,6 +73,8 @@ type CacheEntry = {
   result?: QuotasResult;
   fetchedAt?: number;
   inFlight?: InFlightFetch;
+  /** Credential refresh backoff, kept separate so a failed force refresh preserves warm quotas. */
+  authFailure?: { result: QuotasResult; fetchedAt: number };
 };
 
 // Keyed by provider, or provider@account for pi-multiprovider accounts.
@@ -189,15 +192,37 @@ function waitForFetch(
   });
 }
 
+type FetchOptions = {
+  force?: boolean;
+  signal?: AbortSignal;
+  /** pi-multiprovider account id; keeps per-account results apart. */
+  account?: string;
+};
+
+/** Check cached/in-flight quotas before resolving account credentials. */
+function cachedQuotaResult(
+  provider: SupportedQuotaProvider,
+  options?: FetchOptions,
+): Promise<QuotasResult> | undefined {
+  const key = options?.account ? `${provider}@${options.account}` : provider;
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  const ttl = !entry.result?.success
+    ? entry.result?.error.kind === "rate_limit" ? RATE_LIMIT_TTL_MS : ERROR_TTL_MS
+    : PROVIDER_TTLS_MS[provider];
+  if (!options?.force && entry.result && entry.fetchedAt !== undefined &&
+      Date.now() - entry.fetchedAt < ttl) {
+    return Promise.resolve(entry.result);
+  }
+  // Forced refreshes also join an existing, still-observed fetch.
+  if (entry.inFlight) return waitForFetch(key, entry.inFlight, options?.signal);
+  return undefined;
+}
+
 export async function fetchProviderQuotas(
   authStorage: AuthStorage,
   rawProvider: SupportedQuotaProvider | string,
-  options?: {
-    force?: boolean;
-    signal?: AbortSignal;
-    /** pi-multiprovider account id; keeps per-account results apart. */
-    account?: string;
-  },
+  options?: FetchOptions,
 ): Promise<QuotasResult> {
   const provider =
     normalizeQuotaProvider(rawProvider) ??
@@ -205,28 +230,10 @@ export async function fetchProviderQuotas(
   // Cancellation wins before cache lookup or network kickoff: an already-
   // aborted caller must not start an unobserved background request.
   if (options?.signal?.aborted) return cancelledResult();
+  const cached = cachedQuotaResult(provider, options);
+  if (cached) return cached;
   const key = options?.account ? `${provider}@${options.account}` : provider;
   const entry = cache.get(key) ?? {};
-  const now = Date.now();
-  const ttl = !entry.result?.success
-    ? entry.result?.error.kind === "rate_limit"
-      ? RATE_LIMIT_TTL_MS
-      : ERROR_TTL_MS
-    : PROVIDER_TTLS_MS[provider];
-
-  if (
-    !options?.force &&
-    entry.result &&
-    entry.fetchedAt &&
-    now - entry.fetchedAt < ttl
-  ) {
-    return entry.result;
-  }
-  // Any in-flight fetch is fresher than the cache, so force refreshes join
-  // it too. If its final waiter already aborted, start a fresh request.
-  if (entry.inFlight) {
-    return waitForFetch(key, entry.inFlight, options?.signal);
-  }
 
   const controller = new AbortController();
   const inFlight = {
@@ -244,6 +251,7 @@ export async function fetchProviderQuotas(
           ...current,
           result,
           fetchedAt: Date.now(),
+          authFailure: undefined,
         });
       }
       return result;
@@ -270,10 +278,10 @@ const PI_PROVIDER_ALIASES: Partial<Record<SupportedQuotaProvider, string[]>> = {
 
 /**
  * Fetchers that cannot be scoped to a pooled account's model token:
- * Synthetic reads only SYNTHETIC_API_KEY, and Copilot quotas need the GitHub
- * OAuth token pi-multiprovider does not expose (then fall back to `gh`).
+ * Copilot quotas need the GitHub OAuth token pi-multiprovider does not
+ * expose (its resolved model token is a Copilot proxy token).
  */
-const NO_ACCOUNT_QUOTAS = new Set<SupportedQuotaProvider>(["synthetic", "github-copilot"]);
+const NO_ACCOUNT_QUOTAS = new Set<SupportedQuotaProvider>(["github-copilot"]);
 
 /** Pi provider ids to probe for `provider`'s pooled account, current model first. */
 function piProviderIds(ctx: AccountContext, provider: SupportedQuotaProvider): string[] {
@@ -289,45 +297,105 @@ function piProviderIds(ctx: AccountContext, provider: SupportedQuotaProvider): s
 }
 
 /**
- * Quotas for the account the session actually uses: the active
- * pi-multiprovider account when one is known, else Pi's own credential.
+ * Follow the service's selected identity, checking its cache before touching auth.
+ * Never guess Pi's default account when a loaded service cannot identify one.
  */
 export async function fetchContextQuotas(
   ctx: AccountContext,
   provider: SupportedQuotaProvider,
   options?: { force?: boolean; signal?: AbortSignal },
 ): Promise<QuotaSnapshot> {
-  const base = quotaAuthStorage(ctx.modelRegistry);
-  const account = await quotaAccount(ctx, piProviderIds(ctx, provider), base, options?.signal);
-  if (!account) {
-    return { provider, result: await fetchProviderQuotas(base, provider, options) };
-  }
-  const snapshot = { provider, account: account.label, accountId: account.id };
-  // Fail closed: fetcher fallbacks (env keys, CLI logins) could otherwise
-  // report another account's quota under this account's label.
-  if (!account.authStorage) {
+  let snapshot: Omit<QuotaSnapshot, "result"> = { provider };
+  const cancelled = (): QuotaSnapshot => ({ ...snapshot, result: cancelledResult() });
+  if (options?.signal?.aborted) return cancelled();
+  try {
+    const base = quotaAuthStorage(ctx.modelRegistry);
+    // Retry a changed selection from identity lookup, so its new cache key is
+    // checked before resolving again. Never store a new account under the old key.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      snapshot = { provider };
+      const account = await quotaAccount(ctx, piProviderIds(ctx, provider), base, options?.signal);
+      if (options?.signal?.aborted) return cancelled();
+      if (account === ACCOUNT_SELECTION_CHANGED) continue;
+      if (account === ACCOUNT_SERVICE_PENDING) {
+        return { provider, result: { success: false, error: { kind: "account_pending", message: "pi-multiprovider is updating its pools." } } };
+      }
+      if (account === undefined) {
+        // A service disappearing during resolution is not permission to use
+        // another login. Ordinary standalone requests still use Pi credentials.
+        if (attempt > 0) break;
+        return { provider, result: await fetchProviderQuotas(base, provider, options) };
+      }
+      if (account === null) {
+        return {
+          provider,
+          result: {
+            success: false,
+            error: {
+              kind: "account_unknown",
+              message: "pi-multiprovider did not identify an active account. If this provider has a pool, select one with /switch-account. Older services cannot distinguish no pool from no selection; upgrade to a service with hasPool() to restore unpooled quotas.",
+            },
+          },
+        };
+      }
+      const label = stripVTControlCharacters(account.label).replace(/\p{Cc}/gu, " ").trim();
+      snapshot = { provider, account: label, accountId: account.id };
+      if (NO_ACCOUNT_QUOTAS.has(provider) && !account.upstream) {
+        return {
+          ...snapshot,
+          result: {
+            success: false,
+            error: { message: "Per-account quotas are not available for pooled accounts", kind: "not_applicable" },
+          },
+        };
+      }
+      const scopedOptions = { ...options, account: account.id };
+      const cached = cachedQuotaResult(provider, scopedOptions);
+      if (cached) return { ...snapshot, result: await cached };
+      const failure = cache.get(`${provider}@${account.id}`)?.authFailure;
+      if (!options?.force && failure && Date.now() - failure.fetchedAt < ERROR_TTL_MS) {
+        return { ...snapshot, result: failure.result };
+      }
+      const authStorage = await account.resolveAuth(options?.signal);
+      if (options?.signal?.aborted) return cancelled();
+      if (authStorage === null) {
+        snapshot = { provider };
+        continue; // reselect, including the new identity's cache
+      }
+      if (!authStorage) {
+        const result: QuotasResult = {
+          success: false,
+          error: { kind: "config", message: `Could not resolve credentials for account ${label}` },
+        };
+        const key = `${provider}@${account.id}`;
+        cache.set(key, { ...cache.get(key), authFailure: { result, fetchedAt: Date.now() } });
+        return { ...snapshot, result };
+      }
+      return {
+        ...snapshot,
+        result: await fetchProviderQuotas(authStorage, provider, scopedOptions),
+      };
+    }
     return {
       ...snapshot,
       result: {
         success: false,
-        error: { message: `Could not resolve credentials for account ${account.label}`, kind: "config" },
+        error: {
+          message: "pi-multiprovider changed during account lookup; try again.",
+          kind: "network",
+        },
       },
     };
-  }
-  if (NO_ACCOUNT_QUOTAS.has(provider) && !account.upstream) {
+  } catch {
+    if (options?.signal?.aborted) return cancelled();
     return {
       ...snapshot,
       result: {
         success: false,
-        error: { message: "Per-account quotas are not available for pooled accounts", kind: "not_applicable" },
+        error: { message: "Could not determine the pi-multiprovider account", kind: "network" },
       },
     };
   }
-  const result = await fetchProviderQuotas(account.authStorage, provider, {
-    ...options,
-    account: account.id,
-  });
-  return { ...snapshot, result };
 }
 
 export async function fetchAllProviderQuotas(

@@ -17,6 +17,8 @@ export type QuotasErrorKind =
   | "cancelled"
   | "timeout"
   | "config"
+  | "account_unknown"
+  | "account_pending" // temporary reconciliation; distinct from a lost selection
   | "http"
   // HTTP 429 from the provider's own quota endpoint. Back off hard:
   // retrying at the normal error cadence keeps the limiter tripped.

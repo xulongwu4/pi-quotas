@@ -1,5 +1,5 @@
 import type { AuthStorage } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_FETCHERS } from "../providers/fetch.js";
 import type { QuotasResult } from "../types/quotas.js";
 import {
@@ -40,18 +40,23 @@ let active: { id: string; label: string } | undefined;
 let onResolve: () => void = () => {};
 const tokens: Record<string, string> = { work: jwt("work-acct"), home: jwt("home-acct") };
 const changed = new Map<string, (event: { ctx?: never }) => void>();
-setMultiProviderService({
-  getActiveAccount: async (providerId) => (providerId === pool ? active : undefined),
-  resolveActiveAccountAuth: async (providerId) => {
-    if (providerId !== pool || !active) return undefined;
-    const token = tokens[active.id];
-    onResolve();
-    return token ? { accessToken: token } : undefined;
-  },
-  onActiveAccountChanged: (providerId, callback) => {
-    changed.set(providerId, callback);
-    return () => changed.delete(providerId);
-  },
+beforeEach(() => {
+  pool = "openai-codex";
+  active = undefined;
+  onResolve = () => {};
+  setMultiProviderService({
+    getActiveAccount: async (providerId) => (providerId === pool ? active : undefined),
+    resolveActiveAccountAuth: async (providerId) => {
+      if (providerId !== pool || !active) return undefined;
+      const token = tokens[active.id];
+      onResolve();
+      return token ? { accessToken: token } : undefined;
+    },
+    onActiveAccountChanged: (providerId, callback) => {
+      changed.set(providerId, callback);
+      return () => changed.delete(providerId);
+    },
+  });
 });
 
 function recordKeys(provider: string, id = provider): Array<string | undefined> {
@@ -66,9 +71,7 @@ function recordKeys(provider: string, id = provider): Array<string | undefined> 
 afterEach(() => {
   Object.assign(fetchers, original);
   clearQuotaCache();
-  pool = "openai-codex";
-  active = undefined;
-  onResolve = () => {};
+  setMultiProviderService(undefined);
 });
 
 describe("fetchContextQuotas with pi-multiprovider", () => {
@@ -103,13 +106,14 @@ describe("fetchContextQuotas with pi-multiprovider", () => {
     expect(seen).toEqual([tokens.home]);
   });
 
-  it("uses Pi's own credential for the upstream account or no account", async () => {
+  it("uses Pi's own credential only for an identified upstream account", async () => {
     const seen = recordKeys("openai-codex");
     active = { id: "pi:default", label: "Pi default" };
     expect((await fetchContextQuotas(ctx, "openai-codex")).account).toBe("Pi default");
     active = undefined;
-    expect((await fetchContextQuotas(ctx, "openai-codex")).account).toBeUndefined();
-    expect(seen).toEqual(["upstream-openai-codex", "upstream-openai-codex"]);
+    const unknown = await fetchContextQuotas(ctx, "openai-codex");
+    expect(unknown.result).toMatchObject({ success: false, error: { kind: "account_unknown" } });
+    expect(seen).toEqual(["upstream-openai-codex"]);
   });
 
   it("pins aliases to the pooled provider id's credential", async () => {
@@ -146,9 +150,9 @@ describe("fetchContextQuotas with pi-multiprovider", () => {
     expect(seen).toEqual([]);
   });
 
-  it("leaves providers without a pooled account alone", async () => {
+  it("leaves normal provider credentials alone when the service is absent", async () => {
+    setMultiProviderService(undefined);
     const seen = recordKeys("devin");
-    active = { id: "work", label: "Work" };
     expect((await fetchContextQuotas(ctx, "devin")).account).toBeUndefined();
     expect(seen).toEqual(["upstream-devin"]);
   });
@@ -173,7 +177,9 @@ describe("fetchContextQuotas with pi-multiprovider", () => {
       active = flip ? { id: "home", label: "Home" } : { id: "work", label: "Work" };
     };
     const snapshot = await fetchContextQuotas(ctx, "openai-codex");
-    expect(snapshot.result).toMatchObject({ success: false, error: { kind: "config" } });
+    expect(snapshot.result).toMatchObject({ success: false, error: { kind: "network" } });
+    expect(snapshot.accountId).toBeUndefined();
+    expect(snapshot.account).toBeUndefined();
     expect(seen).toEqual([]);
   });
 

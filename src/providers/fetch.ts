@@ -401,10 +401,12 @@ export async function fetchOpenRouterQuotas(
 }
 
 export async function fetchSyntheticQuotas(
-  _authStorage: AuthStorage,
+  authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
-  const apiKey = process.env.SYNTHETIC_API_KEY;
+  const apiKey = isAccountScoped(authStorage)
+    ? await providerAccessToken(authStorage, "synthetic")
+    : process.env.SYNTHETIC_API_KEY;
   if (!apiKey)
     return failure(
       "No Synthetic API key found (set SYNTHETIC_API_KEY)",
@@ -685,7 +687,7 @@ export async function fetchAntigravityQuotas(
   const stored = authStorage.get("antigravity") as any;
   let projectId: string | undefined =
     (typeof stored?.projectId === "string" ? stored.projectId : undefined) ??
-    process.env.ANTIGRAVITY_PROJECT_ID;
+    (isAccountScoped(authStorage) ? undefined : process.env.ANTIGRAVITY_PROJECT_ID);
   let token: string | undefined;
 
   // getApiKey() refreshes expired OAuth tokens through the registered provider,

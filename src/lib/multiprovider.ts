@@ -21,6 +21,8 @@ export type AccountContext = Pick<
 type ActiveAccount = { id: string; label: string };
 
 interface MultiProviderService {
+  /** True: pooled; false: unpooled; undefined: initializing/reconciling. */
+  hasPool?(providerId: string): boolean | undefined;
   getActiveAccount(
     providerId: string,
     ctx: AccountContext,
@@ -29,26 +31,35 @@ interface MultiProviderService {
     providerId: string,
     ctx: AccountContext,
     signal?: AbortSignal,
-  ): Promise<{ accessToken: string } | undefined>;
+  ): Promise<{ accessToken: string; accountId?: string; label?: string } | undefined>;
   onActiveAccountChanged?(
     providerId: string,
     callback: (event: { ctx?: ExtensionContext }) => void,
   ): () => void;
 }
 
-type ChangeListener = (ctx?: ExtensionContext) => void;
+type ChangeListener = (ctx?: ExtensionContext, providerId?: string, replaced?: boolean) => void;
 
 let service: MultiProviderService | undefined;
+const revisions = new Map<string, number>();
+/** Retry selection; distinct from a stable service with no selected account. */
+export const ACCOUNT_SELECTION_CHANGED = Symbol("account-selection-changed");
+export const ACCOUNT_SERVICE_PENDING = Symbol("account-service-pending");
 const listeners = new Set<ChangeListener>();
 // Provider ids we already follow on the current service.
 const followed = new Map<string, () => void>();
 
 function setService(next: MultiProviderService | undefined): void {
-  if (next === service) return; // re-announced on every session start
-  for (const unsubscribe of followed.values()) unsubscribe();
-  followed.clear();
-  service = next;
-  for (const listener of listeners) listener();
+  const replaced = next !== service;
+  if (replaced) {
+    for (const unsubscribe of followed.values()) unsubscribe();
+    followed.clear();
+    revisions.clear();
+    service = next;
+  }
+  // Same-object announcements bracket reconciliation, not just factory load.
+  for (const id of followed.keys()) revisions.set(id, (revisions.get(id) ?? 0) + 1);
+  for (const listener of listeners) listener(undefined, undefined, replaced);
 }
 
 /** Follow the pooled account of `providerId`, so switches repaint quotas. */
@@ -57,15 +68,16 @@ function follow(providerId: string): void {
   followed.set(
     providerId,
     service.onActiveAccountChanged(providerId, (event) => {
-      for (const listener of listeners) listener(event?.ctx);
+      revisions.set(providerId, (revisions.get(providerId) ?? 0) + 1);
+      for (const listener of listeners) listener(event?.ctx, providerId);
     }),
   );
 }
 
 /**
  * Track pi-multiprovider's service. `onChange` fires when the service
- * appears and when a followed provider's active account changes
- * (/switch-account, or a pin restored on resume).
+ * appears, is re-announced after reconciliation, and when a followed provider's
+ * active account changes (/switch-account, or a pin restored on resume).
  */
 export function trackMultiProvider(
   pi: ExtensionAPI,
@@ -80,9 +92,14 @@ export function trackMultiProvider(
       setService(value);
     }
   });
+  let stopped = false;
   return () => {
+    if (stopped) return;
+    stopped = true;
     off();
     if (onChange) listeners.delete(onChange);
+    // Pi loads each extension in its own module graph; this tracker owns it.
+    setService(undefined);
   };
 }
 
@@ -100,8 +117,8 @@ export type QuotaAccount = {
   id: string;
   /** Pi's own /login credential (the pool's upstream account). */
   upstream: boolean;
-  /** Undefined when the account's credential could not be resolved. */
-  authStorage?: AuthStorage;
+  /** Resolve only on a quota cache miss; null means selection changed, undefined means auth failed. */
+  resolveAuth(signal?: AbortSignal): Promise<AuthStorage | null | undefined>;
 };
 
 const ACCOUNT_SCOPED = Symbol("pi-quotas:account-scoped");
@@ -145,73 +162,75 @@ function scopedAuthStorage(
   } as unknown as AuthStorage;
 }
 
-/** Retries when the active account changes mid-lookup. */
-const MAX_LOOKUPS = 3;
-
 /**
- * The pi-multiprovider account the session uses for one quota provider,
- * probing `ids` (the Pi provider ids its fetcher reads) in order. Undefined
- * when pi-multiprovider is absent or has not picked an account yet; callers
- * then use Pi's own credential, as before.
+ * Select an account without resolving credentials (or taking the auth-store lock).
+ * Undefined means no service or confirmed no pool across all aliases.
+ * Null means the service cannot identify an account; older services cannot
+ * distinguish that from a provider with no pool.
+ * ACCOUNT_SELECTION_CHANGED asks the caller to retry, not infer an absent pool.
+ * ACCOUNT_SERVICE_PENDING denotes transient reconciliation, not a lost selection.
  */
 export async function quotaAccount(
   ctx: AccountContext,
   ids: string[],
   base: AuthStorage,
   signal?: AbortSignal,
-): Promise<QuotaAccount | undefined> {
+): Promise<QuotaAccount | null | undefined | typeof ACCOUNT_SELECTION_CHANGED | typeof ACCOUNT_SERVICE_PENDING> {
+  const currentService = service;
+  if (!currentService) return undefined;
+  let currentProvider: string | undefined;
+  try { currentProvider = ctx.model?.provider; } catch { /* stale context: probe aliases */ }
+  let unpooled = true;
   for (const id of ids) {
-    if (!service || signal?.aborted) return undefined;
+    if (signal?.aborted) return null;
+    if (currentService !== service) return ACCOUNT_SELECTION_CHANGED;
     follow(id);
-    const lookup = () => service?.getActiveAccount(id, ctx).catch(() => undefined);
-    let account = await lookup();
-    if (!account) continue;
-    const key = (account: ActiveAccount) => `${id}:${account.id}`;
-    if (account.id === UPSTREAM_ACCOUNT_ID) {
-      // Pin every alias to this id's own credential, so a fetcher that
-      // prefers another alias (grok over xai) cannot read a different account.
-      return {
-        label: account.label,
-        id: key(account),
-        upstream: true,
-        authStorage: scopedAuthStorage(base, ids, base.get(id), () =>
-          base.getApiKey(id),
-        ),
-      };
+    const pooled = currentService.hasPool?.(id);
+    if (currentService.hasPool && pooled === undefined) return ACCOUNT_SERVICE_PENDING;
+    if (pooled === false) {
+      if (id === currentProvider) return undefined;
+      continue;
     }
-    // The two service calls select independently, so re-read the account
-    // after resolving: a switch in between would pair one account's label
-    // with another's token.
-    // ponytail: an A→B→A switch inside one resolve still slips through; an
-    // atomic id+token resolver in pi-multiprovider would close it.
-    for (let attempt = 0; attempt < MAX_LOOKUPS && !signal?.aborted; attempt++) {
-      const token = (
-        await service.resolveActiveAccountAuth(id, ctx, signal).catch(() => undefined)
-      )?.accessToken;
-      const now = await lookup();
-      if (!now) return undefined; // back to automatic selection
-      if (now.id !== account.id) {
-        account = now;
-        continue;
-      }
-      if (now.id === UPSTREAM_ACCOUNT_ID) return quotaAccount(ctx, ids, base, signal);
-      if (!token) break;
-      const credential = {
-        type: "oauth",
-        access: token,
-        key: token,
-        accountId: codexAccountId(token),
-      };
-      return {
-        label: account.label,
-        id: key(account),
-        upstream: false,
-        authStorage: scopedAuthStorage(base, ids, credential, async () => token, true),
-      };
+    // A missing capability is unknown, never proof that Pi's login is in use.
+    unpooled = false;
+    const selectedRevision = revisions.get(id);
+    const account = await currentService.getActiveAccount(id, ctx);
+    if (currentService !== service || selectedRevision !== revisions.get(id)) return ACCOUNT_SELECTION_CHANGED;
+    if (!account) {
+      if (pooled === true && id === currentProvider) return null;
+      continue;
     }
-    // Unresolvable or unstable: report the account without credentials so
-    // callers fail closed instead of querying some other account.
-    return { label: account.label, id: key(account), upstream: false };
+    const upstream = account.id === UPSTREAM_ACCOUNT_ID;
+    return {
+      label: account.label,
+      id: `${id}:${account.id}`,
+      upstream,
+      async resolveAuth(signal) {
+        if (signal?.aborted || currentService !== service || selectedRevision !== revisions.get(id)) return null;
+        if (upstream) {
+          // Pin aliases to this provider's own upstream credential.
+          return scopedAuthStorage(base, ids, base.get(id), () => base.getApiKey(id));
+        }
+        const auth = await currentService.resolveActiveAccountAuth(id, ctx, signal).catch(() => undefined);
+        const now = await currentService.getActiveAccount(id, ctx).catch(() => undefined);
+        if (
+          signal?.aborted || currentService !== service || selectedRevision !== revisions.get(id) ||
+          !now || now.id !== account.id ||
+          (auth?.accountId !== undefined && auth.accountId !== now.id) ||
+          (auth?.label !== undefined && auth.label !== now.label)
+        ) return null;
+        const token = auth?.accessToken;
+        if (!token) return undefined;
+        // ponytail: older services without accountId cannot prove identity
+        // across unannounced A→B→A switches between identically named accounts.
+        return scopedAuthStorage(base, ids, {
+          type: "oauth",
+          access: token,
+          key: token,
+          accountId: codexAccountId(token),
+        }, async () => token, true);
+      },
+    };
   }
-  return undefined;
+  return unpooled ? undefined : null;
 }
