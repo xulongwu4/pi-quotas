@@ -122,7 +122,34 @@ No additional setup is required - if Pi can use the provider, pi-quotas can chec
 
 ### Multiple accounts (pi-multiprovider)
 
-With [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) pooling several accounts for a provider, quotas follow the account the session is actually using (the `/switch-account` pin, or the pool's session-affinity pick after the first request). The account label is shown in the footer, next to the provider in `/quotas`, and in quota warnings. Until the pool has picked an account, pi-quotas reports Pi's own `/login` credential as before. Pooled GitHub Copilot and Synthetic accounts are not supported: their quota endpoints need credentials pi-multiprovider does not expose.
+With [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) loaded, quotas follow the session's `/switch-account` pin or session-affinity selection. No extra dependency or configuration is required.
+
+- The account label appears in the footer, `/quotas`, provider commands, and quota warnings.
+- Quota caches and warning state are separated by provider and account ID. Explicit `/switch-account` changes and restored pins clear the previous footer and refresh it. Implicit-affinity failovers are not announced by pi-multiprovider 0.10.1; they appear on the next turn-end refresh or 60-second footer tick.
+- **Explicit-pin failover limitation:** while a pinned account is cooling down, pi-multiprovider can serve a request with another account without changing the explicit pin. Its service still reports the pinned account, so pi-quotas cannot identify that request's actual account, even after refreshing. The display follows the service-reported selection, not a guaranteed record of the last request. Accurate reporting requires upstream last-used account information.
+- Fresh cached quotas and in-flight requests are reused after identity lookup, without resolving OAuth credentials or taking the auth-store lock again. Credential-resolution failures back off for 10 seconds per account without destroying warm quotas. Manual refresh bypasses the backoff/cache; expired entries resolve credentials normally.
+- Pooled credentials are used directly, including Synthetic keys and the account ID inside Codex tokens. Unresolvable credentials report unavailable rather than borrowing another login, environment key, or dashboard cookie.
+- Pooled GitHub Copilot accounts show their label but not quotas: the service exposes a model token, not the GitHub OAuth token needed for usage lookup.
+
+Before a pin or session-affinity selection exists (including when session affinity is disabled), pi-quotas shows **account unknown** and withholds quotas rather than showing a potentially unrelated default login. If the provider has a configured pool, use `/switch-account` to identify the selection.
+
+**Pool-presence capability:** with a pi-multiprovider service exposing `hasPool(providerId)`, confirmed unpooled providers keep normal Pi credentials, quotas, and warnings. `undefined` means initialization/reconciliation is incomplete: quota fetching returns `account_pending` rather than using another login. Routine same-service reconciliation retains the last footer paint and respects the 30-second warning interval; startup recovery and explicit account switches refresh immediately. A genuinely lost selection still clears the old display and reports `account unknown`. The current model provider takes precedence over alias pools; aliases are probed for providers other than the current model.
+
+**Older services (including stock 0.10.1):** without `hasPool`, no pool and no selection are indistinguishable. Such providers remain `account unknown`; `/switch-account` only helps configured pools. Use a pi-multiprovider build with the new capability, or disable it to restore unpooled quotas. pi-quotas checks capabilities rather than version numbers and never treats a missing method as proof that no pool exists.
+
+The combined `/quotas` view omits ambiguous `account_unknown` and transient `account_pending` rows instead of listing every unconfigured provider. Individual provider commands still explain the state.
+
+When the credential resolver returns `accountId`, pi-quotas verifies it against the selected account and retries mismatches, including unannounced switches between identically named accounts. On older services without that field it checks labels and change notifications, but an unannounced switch away and back with identical labels remains unprovable. This identity check does not resolve the explicit-pin failover limitation described above.
+
+### Cross-extension verification
+
+With Bun and a pi-multiprovider source checkout (dependencies installed), run:
+
+```sh
+npm run test:multiprovider -- ../pi-multiprovider
+```
+
+This offline check uses the real service/scheduler with mocked HTTP responses. It covers startup readiness, missing selection, account-bound credentials, same-object announcements, and pool removal. It reads no live credentials and makes no provider requests.
 
 ## Requirements
 

@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [0.9.0] - 2026-09-29
 
 ### Added
-- **pi-multiprovider account support**: when pi-multiprovider pools several accounts for a provider, quotas are fetched with the credential of the account the session is using (via pi-multiprovider's `pi-multiprovider:service` announcement; no dependency added) and the account label is shown in the footer, `/quotas`, provider commands, and quota warnings. Results and warning state are keyed by Pi provider id plus account id, and the footer repaints on `/switch-account` or a restored pin. Falls back to Pi's own credential when pi-multiprovider is absent or no account has been selected yet. A pooled account never borrows ambient credentials: it skips the `~/.codex` account id, the Cursor dashboard cookie, and OpenCode Go env keys/cookies/config, and an account whose credential cannot be resolved reports an error. Pooled GitHub Copilot and Synthetic accounts report per-account quotas as unavailable, since those fetchers cannot use the pooled token.
+- **pi-multiprovider account support**: quota credentials, footer labels, dashboard headings, provider commands, and warnings follow the session's selected account. Caches and warning state are keyed by provider and account ID. No additional dependency.
+- Explicit account switches and restored pins clear stale footer data and cancel old refreshes; implicit-affinity failovers are picked up on turn end or the next footer tick. Explicit-pin failovers can remain invisible to the upstream service. Credential lookups retry detected switches, fail closed on resolution errors, and release service subscriptions on shutdown.
+- Review fixes: check account-specific caches/in-flight requests before OAuth resolution; skip credential resolution entirely for unsupported pooled Copilot quotas. Unknown service selections now show `account unknown` instead of potentially unrelated default-login quotas.
+- Preserve upstream warning cooldowns across service activation, ignore unrelated provider switches in the footer and credential resolver, and isolate test service state between tests.
+- Retry account selection when the service is replaced or the same provider switches during identity lookup, bounded to three attempts. Ambiguous accounts are omitted from the combined dashboard and no longer receive unconditional `/switch-account` advice.
+- Use optional upstream `hasPool()` to restore normal quotas for confirmed unpooled providers, and verify returned credential `accountId` to reject same-label identity mismatches. Older service versions remain supported with the documented conservative limitations.
+- Distinguish transient reconciliation (`account_pending`) from a lost selection (`account_unknown`). Keep the footer stable and warning throttle intact on routine announcements; startup recovery, service replacement and explicit switches still refresh immediately.
+- Cancel obsolete warnings, prefer the current model provider over alias pools, and let callers with valid credentials proceed despite a concurrent caller's cached auth failure.
+- Back off failed credential refreshes for 10 seconds per account while preserving warm quotas; clear stale retry identities and hide not-applicable upstream API-key footers.
+- Add `npm run test:multiprovider -- <checkout>` for repeatable offline verification against the real upstream service.
+- Pooled Synthetic quotas use the selected key; Codex derives its account ID from the selected token. Ambient CLI credentials, dashboard cookies, and Antigravity project IDs are not borrowed for pooled accounts.
+- Pooled GitHub Copilot quotas remain unavailable because its model token cannot query GitHub usage. Account labels remain visible even when quotas are unavailable. See README for selection and service atomicity limitations.
 
 ## [0.8.0] - 2026-09-20
 
